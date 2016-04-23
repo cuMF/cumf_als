@@ -1,0 +1,1983 @@
+/*
+ * als.cu
+ *
+ *  Created on: Feb 10, 2015
+ *      Author: Wei Tan (wtan@us.ibm.com)
+ *  Alternating Least Square for Matrix Factorization on CUDA 7.0+
+ *  Code optimized for F = 100, and on cc 3.5, 3.7 platforms. Also tested in cc 5.2
+ */
+ 
+//#define CUMF_USE_MAGMA
+#define CUMF_USE_HALF
+#include "als.h"
+#include <assert.h>
+#include <cuda_fp16.h> 
+#ifdef CUMF_USE_HALF
+#define SCAN_BATCH 24
+#else
+#define SCAN_BATCH 24
+#endif
+#ifdef CUMF_USE_MAGMA
+#include "flops.h"
+#include "magma.h"
+#include "magma_lapack.h"
+#include "testings.h"
+#endif
+
+void loadCSRSparseMatrixBin(const char* dataFile, const char* rowFile, const char* colFile,
+		float* data, int* row, int* col, const int m, const long nnz) {
+    printf("\n loading CSR...\n");
+	FILE *dFile = fopen(dataFile,"rb");
+	FILE *rFile = fopen(rowFile,"rb");
+	FILE *cFile = fopen(colFile,"rb");
+	if (!rFile||!dFile||!dFile)
+	{
+		printf("Unable to open file!");
+		return;
+	}
+
+	fread(&row[0], 4*(m+1) ,1, rFile);
+	fread(&col[0], 4*nnz ,1, cFile);
+	fread(&data[0], 4*nnz ,1, dFile);
+
+	fclose(rFile);
+	fclose(dFile);
+	fclose(cFile);
+}
+
+void loadCSCSparseMatrixBin(const char* dataFile, const char* rowFile, const char* colFile,
+		float * data, int* row, int* col, const int n, const long nnz) {
+    printf("\n loading CSC...\n");
+
+	FILE *dFile = fopen(dataFile,"rb");
+	FILE *rFile = fopen(rowFile,"rb");
+	FILE *cFile = fopen(colFile,"rb");
+	if (!rFile||!dFile||!dFile)
+	{
+		printf("Unable to open file!");
+		return;
+	}
+
+	fread(&row[0], 4*nnz ,1, rFile);
+	fread(&col[0], 4*(n+1) ,1, cFile);
+	fread(&data[0], 4*nnz ,1, dFile);
+
+	fclose(rFile);
+	fclose(dFile);
+	fclose(cFile);
+}
+
+void loadCooSparseMatrixRowPtrBin(const char* rowFile, int* row, const long nnz) {
+    printf("\n loading COO Row...\n");
+	FILE *rfile = fopen(rowFile,"rb");
+	fread(&row[0], 4*nnz ,1, rfile);
+	fclose(rfile);
+}
+
+void loadCooSparseMatrixBin(const char* dataFile, const char* rowFile, const char* colFile,
+		float* data, int* row, int* col, const long nnz) {
+    printf("\n loading COO...\n");
+
+	FILE *dFile = fopen(dataFile,"rb");
+	FILE *rFile = fopen(rowFile,"rb");
+	FILE *cFile = fopen(colFile,"rb");
+	if (!rFile||!dFile||!cFile)
+	{
+		printf("Unable to open file!");
+		return;
+	}
+
+	fread(&row[0], 4*nnz, 1, rFile);
+	fread(&col[0], 4*nnz, 1, cFile);
+	fread(&data[0], 4*nnz, 1, dFile);
+
+	fclose(rFile);
+	fclose(dFile);
+	fclose(cFile);
+
+
+}
+
+__global__ void fp32Array2fp16Array(const float * fp32Array, half* fp16Array,
+		const int size) {
+	int i = blockDim.x*blockIdx.x + threadIdx.x;
+	if (i < size) {
+		fp16Array[i] =  __float2half(fp32Array[i]);
+	}
+}
+
+int updateX(const int batch_size, const int batch_offset, float * ythetaT, float * tt, float * XT,
+		cublasHandle_t handle, const int m, const int n, const int f, const int nnz,
+		float** devPtrTTHost, float **devPtrYthetaTHost){
+	//variables for timing
+	float elapsed;
+	struct timeval tv0, tv1, tv2;
+	gettimeofday(&tv0, NULL);
+	printf("*******Batch LU factorization of tt.\n");
+	//pointers needed by batch op
+	float **devPtrTT = 0;
+	int *INFO;
+	for (int k = 0; k < batch_size; k++) {
+		devPtrTTHost[k] = &tt[k * f * f];
+	}
+	cudacall(cudaMalloc((void** ) &devPtrTT, batch_size * sizeof(*devPtrTT)));
+	cudacall(cudaMemcpy(devPtrTT, devPtrTTHost, batch_size * sizeof(*devPtrTT),cudaMemcpyHostToDevice));
+	//cudacall( cudaMalloc(&P, f * batch_size * sizeof(int)) );
+	cudacall( cudaMalloc(&INFO, batch_size * sizeof(int) ));
+	cublascall(cublasSgetrfBatched(handle, f, devPtrTT, f, NULL, INFO, batch_size));
+
+	cudaThreadSynchronize();
+	gettimeofday(&tv1, NULL);
+	elapsed = (tv1.tv_sec - tv0.tv_sec)
+			+ (tv1.tv_usec - tv0.tv_usec) / 1000000.0;
+	printf("\t %f seconds. \n", elapsed);
+
+	printf("*******solve: tt * XT = ythetaT use cublas, with LU decomposition.\n");
+
+	float **devPtrYthetaT = 0;
+
+	for (int k = 0; k < batch_size; k++) {
+		devPtrYthetaTHost[k] = &ythetaT[batch_offset * f + k * f];
+	}
+	cudacall(cudaMalloc((void** ) &devPtrYthetaT, batch_size * sizeof(*devPtrYthetaT)));
+	cudacall(cudaMemcpy(devPtrYthetaT, devPtrYthetaTHost, batch_size * sizeof(*devPtrYthetaT), cudaMemcpyHostToDevice));
+
+	int * info2 = (int *) malloc(sizeof(int));
+	cublascall( cublasSgetrsBatched(handle, CUBLAS_OP_N, f, 1,
+			(const float ** ) devPtrTT, f, NULL, devPtrYthetaT, f, info2, batch_size) );
+
+	cudaThreadSynchronize();
+	cudaError_t cudaStat1 = cudaGetLastError();
+	if (cudaStat1 != cudaSuccess) {
+		fprintf(stderr,"Failed to launch cublasSgetrsBatched (error code: %s)!\n", cudaGetErrorString(cudaStat1));
+		exit(EXIT_FAILURE);
+	}
+
+	cudacall( cudaMemcpy(&XT[batch_offset * f], &ythetaT[batch_offset * f],
+			batch_size * f * sizeof(float), cudaMemcpyDeviceToDevice) );
+	gettimeofday(&tv2, NULL);
+	elapsed = (tv2.tv_sec - tv1.tv_sec)
+			+ (tv2.tv_usec - tv1.tv_usec) / 1000000.0;
+	printf("\t %f seconds. \n", elapsed);
+
+	cudacall(cudaFree(devPtrTT));
+	//cudacall(cudaFree(P));
+	cudacall(cudaFree(INFO));
+	cudacall(cudaFree(devPtrYthetaT));
+	return 0;
+}
+
+int updateTheta(const int batch_size, const int batch_offset, float * xx,
+		  float * yTXT, float * thetaT,
+		cublasHandle_t handle,
+		 const int m, const int n, const int f, const int nnz,
+		 float ** devPtrXXHost, float **devPtrYTXTHost ){
+
+	//variables for timing
+	float elapsed;
+	struct timeval tv0, tv1, tv2;
+
+	gettimeofday(&tv0, NULL);
+	printf("*******LU factorize xx.\n");
+	float **devPtrXX = 0;
+
+	for (int k = 0; k < batch_size; k++) {
+		devPtrXXHost[k] = &xx[k * f * f];
+	}
+	cudacall(cudaMalloc((void** ) &devPtrXX, batch_size * sizeof(*devPtrXX)));
+	cudacall(cudaMemcpy(devPtrXX, devPtrXXHost, batch_size * sizeof(*devPtrXX), cudaMemcpyHostToDevice));
+	int *INFO;
+	//cudacall(cudaMalloc(&P, f * batch_size * sizeof(int)));
+	cudacall(cudaMalloc(&INFO, batch_size * sizeof(int)));
+	cublascall(cublasSgetrfBatched(handle, f, devPtrXX, f, NULL, INFO, batch_size));
+	cudaThreadSynchronize();
+
+	gettimeofday(&tv1, NULL);
+	elapsed = (tv1.tv_sec - tv0.tv_sec)
+			+ (tv1.tv_usec - tv0.tv_usec) / 1000000.0;
+	printf("\t %f seconds. \n", elapsed);
+
+	printf("******* solve xx * thetaT = yTXT with CUDA 7.\n");
+
+	float **devPtrYTXT = 0;
+
+	for (int k = 0; k < batch_size; k++) {
+		devPtrYTXTHost[k] = &yTXT[batch_offset * f + k * f];
+	}
+
+	cudacall(cudaMalloc((void** ) &devPtrYTXT, batch_size * sizeof(*devPtrYTXT)));
+	cudacall(cudaMemcpy(devPtrYTXT, devPtrYTXTHost, batch_size * sizeof(*devPtrYTXT),cudaMemcpyHostToDevice));
+
+	int * info2 = (int *) malloc(sizeof(int));
+	cublascall( cublasSgetrsBatched(handle, CUBLAS_OP_N, f, 1,
+			(const float ** ) devPtrXX, f, NULL, devPtrYTXT, f, info2, batch_size) );
+	cudaThreadSynchronize();
+	cudaError_t cudaStat1 = cudaGetLastError();
+	if (cudaStat1 != cudaSuccess) {
+		fprintf(stderr,"Failed to launch cublasSgetrsBatched (error code: %s)!\n", cudaGetErrorString(cudaStat1));
+		exit(EXIT_FAILURE);
+	}
+
+	cudacall( cudaMemcpy( &thetaT[batch_offset * f], &yTXT[batch_offset * f],
+	                        batch_size * f * sizeof(float), cudaMemcpyDeviceToDevice) );
+	gettimeofday(&tv2, NULL);
+	elapsed = (tv2.tv_sec - tv1.tv_sec)
+			+ (tv2.tv_usec - tv1.tv_usec) / 1000000.0;
+	printf("\t %f seconds. \n", elapsed);
+
+	cudaFree(devPtrXX);
+	cudaFree(INFO);
+	free(info2);
+	cudaFree(devPtrYTXT);
+	return 0;
+}
+
+#ifdef USE_MAGMA
+int updateThetaMagma(const int batch_size, const int batch_offset, float * xx,
+		  float * yTXT, float * thetaT,
+		cublasHandle_t handle,
+		 const int m, const int n, const int f, const int nnz,
+		 float ** devPtrXXHost, float **devPtrYTXTHost ){
+	//variables for timing
+	float elapsed;
+	struct timeval tv1, tv2;
+	gettimeofday(&tv1, NULL);
+	printf("*******magma Cholesky factorization.\n");
+	magma_init();
+	magma_opts opts( MagmaOptsBatched );
+	char *parray[10];
+	char **x;
+	x = &parray[0];
+	opts.parse_opts(1,x);
+	magma_queue_t queue = opts.queue;
+	int min_batch = batch_size;
+	int info = 0;
+	int * dinfo_array = 0;
+	float **dA_array = NULL; 
+	float **dB_array = NULL;
+	float **hA_array = (float**) malloc(min_batch * sizeof(hA_array[0]));
+	float **hB_array = (float**) malloc(min_batch * sizeof(hB_array[0]));	
+
+	cudacall (cudaMalloc((void**) &dinfo_array, min_batch*sizeof(int)));
+	cudacall(cudaMalloc((void** ) &dA_array, min_batch * sizeof(*dA_array)));
+	cudacall(cudaMalloc((void** ) &dB_array, min_batch * sizeof(*dB_array)));
+	for (int k = 0; k < batch_size; k++) {
+		hA_array[k] = &xx[k * f * f];
+		hB_array[k] = &yTXT[batch_offset * f + k * f];
+	}
+	cudacall(cudaMemcpy(dA_array, hA_array, min_batch * sizeof(*dA_array), cudaMemcpyHostToDevice));
+	cudacall(cudaMemcpy(dB_array, hB_array, min_batch * sizeof(*dB_array), cudaMemcpyHostToDevice));
+
+	info = magma_sposv_batched(MagmaLower, f, 1, dA_array, f, dB_array, f, dinfo_array, min_batch, queue);
+	magma_int_t *dipiv;
+	magma_int_t     **dipiv_array = NULL;
+	TESTING_MALLOC_DEV( dipiv, magma_int_t, f * min_batch );
+	TESTING_MALLOC_DEV( dipiv_array, magma_int_t*,     min_batch );
+	magma_iset_pointer( dipiv_array, dipiv, 1, 0, 0, f, min_batch, queue );
+
+	//info = magma_sgesv_nopiv_batched(f, 1, dA_array, f, dB_array, f, dinfo_array, min_batch, queue);
+    //info = magma_sgesv_batched(f, 1, dA_array, f, dipiv_array, dB_array, f, dinfo_array, min_batch, queue);
+
+	int *cpu_info = (int*) malloc(min_batch*sizeof(int));
+	cudacall(cudaMemcpy(cpu_info, dinfo_array, min_batch * sizeof(int),cudaMemcpyDeviceToHost));
+
+	cudacall( cudaMemcpy(&thetaT[batch_offset * f], &yTXT[batch_offset * f],
+			batch_size * f * sizeof(float), cudaMemcpyDeviceToDevice) );
+	
+	for(int i = 0; i < min_batch; i++){
+		if(cpu_info[i] != 0 ){
+			printf("magma_sposv_batched matrix %d returned internal error %d\n",i, (int)cpu_info[i] );
+		}
+	}
+	if (info != 0)
+		printf("magma_sposv_batched returned argument error %d: %s.\n", (int) info, magma_strerror( info ));
+	
+	cudaFree(dA_array);
+	cudaFree(dB_array);
+	cudaFree( dinfo_array );
+	cudaFree(dipiv_array);
+	cudaFree(dipiv);
+	free(cpu_info);
+	free(hA_array);
+	free(hB_array);
+	//free(x);
+	magma_finalize();
+	gettimeofday(&tv2, NULL);
+	elapsed = (tv2.tv_sec - tv1.tv_sec)
+			+ (tv2.tv_usec - tv1.tv_usec) / 1000000.0;
+	printf("\t %f seconds. \n", elapsed);
+	return 0;
+}
+#endif
+
+__global__ void RMSE(const float * csrVal, const int* cooRowIndex,
+		const int* csrColIndex, const float * __restrict__ thetaT, const float * __restrict__ XT, float * error, const int nnz,
+		const int error_size, const int f) {
+	int i = blockDim.x*blockIdx.x + threadIdx.x;
+	if (i < nnz) {
+		int row = cooRowIndex[i];
+		int col = csrColIndex[i];
+		float e = csrVal[i];
+		//if(i%1000000==0) printf("row: %d, col: %d, csrVal[%d]: %f.\t", row, col, i, e);
+		for (int k = 0; k < f; k++) {
+			e -= __ldg(&thetaT[f * col + k]) * __ldg(&XT[f * row + k]);
+		}
+		atomicAdd(&error[i%error_size], e*e);
+		//error[i] = e*e;
+		//if(i%1000000==0) printf("error[%d]: %f.\n", i, e);
+	}
+}
+
+//using fp16 as thetaT's format
+//using fp16 in computate seems causing register pressure since half intrinsics cannot be used.
+//using fp16 in compute also does not converge. not sure if the code is incorrect, or ALS cannot tolerate half-precision
+__global__ void
+__launch_bounds__(64, 6)
+get_hermitian100WithHalf(const int batch_offset, float* tt,
+		const int* csrRowIndex, const int* csrColIndex, const float lambda, const int m, const int F,
+		const half* __restrict__ thetaT_fp16) {
+	extern __shared__ float2 thetaTemp[];
+	int row = blockIdx.x + batch_offset;
+	if (row < m) {
+		//this block needs to handle end - start thetaT columns
+		int start = csrRowIndex[row];
+		int end = csrRowIndex[row + 1];
+		//slide through [start, end] by window size SCAN_BATCH
+		int iterations = (end - start - 1)/SCAN_BATCH + 1;
+		
+		float temp0= 0, temp1= 0, temp2= 0, temp3= 0, temp4= 0, temp5= 0, temp6= 0, temp7= 0, temp8= 0, temp9 = 0;
+		float temp10= 0, temp11= 0, temp12= 0, temp13= 0, temp14= 0, temp15= 0, temp16= 0, temp17= 0, temp18= 0, temp19 = 0;
+		float temp20= 0, temp21= 0, temp22= 0, temp23= 0, temp24= 0, temp25= 0, temp26= 0, temp27= 0, temp28= 0, temp29 = 0;
+		float temp30= 0, temp31= 0, temp32= 0, temp33= 0, temp34= 0, temp35= 0, temp36= 0, temp37= 0, temp38= 0, temp39 = 0;
+		float temp40= 0, temp41= 0, temp42= 0, temp43= 0, temp44= 0, temp45= 0, temp46= 0, temp47= 0, temp48= 0, temp49 = 0;
+		float temp50= 0, temp51= 0, temp52= 0, temp53= 0, temp54= 0, temp55= 0, temp56= 0, temp57= 0, temp58= 0, temp59 = 0;
+		float temp60= 0, temp61= 0, temp62= 0, temp63= 0, temp64= 0, temp65= 0, temp66= 0, temp67= 0, temp68= 0, temp69 = 0;
+		float temp70= 0, temp71= 0, temp72= 0, temp73= 0, temp74= 0, temp75= 0, temp76= 0, temp77= 0, temp78= 0, temp79 = 0;
+		float temp80= 0, temp81= 0, temp82= 0, temp83= 0, temp84= 0, temp85= 0, temp86= 0, temp87= 0, temp88= 0, temp89 = 0;
+		float temp90= 0, temp91= 0, temp92= 0, temp93= 0, temp94= 0, temp95= 0, temp96= 0, temp97= 0, temp98= 0, temp99 = 0;
+	
+		int tile_x = 0;
+		int tile_y = 0;
+
+		int tile = F/10;
+		for ( int i = 0; i < 10; i++){
+			int end = ((20-i)*(i+1))/2;
+			if(threadIdx.x < end){
+				tile_x = i * tile;
+				tile_y = (10 + threadIdx.x - end) * tile;
+				break;
+			}
+		}
+		//iteration: copy gmem-->smem; aggregate smem-->register
+		for (int iter = 0; iter < iterations; iter ++){
+			//float2 theta;
+			//copy texture --> smem, and sync
+			//two layers: warp divergence unless we split at 32
+			//require: 32 >= SCAN_BATCH
+			if(threadIdx.x < 2*32 ){
+				int index = threadIdx.x - (threadIdx.x/32)*32;	//0 to 31;
+				if(index < SCAN_BATCH){
+					if(iter*SCAN_BATCH + index < end - start){
+						//for (int k = 50*(threadIdx.x/32); k < 50*(threadIdx.x/32) + 50; k += 2){
+						//IMPORTANT: for loop has constant and identical start and end
+						if(threadIdx.x < 32){
+							for (int k = 0; k < 50; k += 2){
+								half2 theta_half2 = __ldg((half2*)&thetaT_fp16[ F * csrColIndex[start + iter*SCAN_BATCH + index] + k]);
+								thetaTemp[index * F/2 + k/2] = __half22float2(theta_half2);
+								//theta.x = __half2float(__ldg(&thetaT_fp16[ F * csrColIndex[start + iter*SCAN_BATCH + index] + k]));
+								//theta.y = __half2float(__ldg(&thetaT_fp16[ F * csrColIndex[start + iter*SCAN_BATCH + index] + k+1]));
+								//thetaTemp[index * F/2 + k/2] = theta;
+							}
+						}
+						else {
+							for (int k = 0; k < 50; k += 2){
+								half2 theta_half2 = __ldg((half2*)&thetaT_fp16[ F * csrColIndex[start + iter*SCAN_BATCH + index] + k + 50]);
+								thetaTemp[index * F/2 + k/2 + 25] = __half22float2(theta_half2);
+								//theta.x = __half2float(__ldg(&thetaT_fp16[ F * csrColIndex[start + iter*SCAN_BATCH + index] + k + 50]));
+								//theta.y = __half2float(__ldg(&thetaT_fp16[ F * csrColIndex[start + iter*SCAN_BATCH + index] + k + 51]));
+								//thetaTemp[index * F/2 + k/2 + 25] = theta;
+							}
+						}
+					}
+					//must be the last iteration; no need to check
+					//not enough theta to copy, set zero
+					else
+						memset(&thetaTemp[index*F/2], 0, F*sizeof(float));
+				}
+			}
+			__syncthreads();
+			//tile: 10*10
+			if(threadIdx.x < 55 ){
+				for(int k = 0; k < SCAN_BATCH; k++){
+					temp0 += thetaTemp[tile_x/2 + k*F/2].x * thetaTemp[tile_y/2 + k*F/2].x;
+					temp1 += thetaTemp[tile_x/2 + k*F/2].x * thetaTemp[tile_y/2 + k*F/2].y;
+					temp2 += thetaTemp[tile_x/2 + k*F/2].x * thetaTemp[tile_y/2 +1 + k*F/2].x;
+					temp3 += thetaTemp[tile_x/2 + k*F/2].x * thetaTemp[tile_y/2 +1 + k*F/2].y;
+					temp4 += thetaTemp[tile_x/2 + k*F/2].x * thetaTemp[tile_y/2 +2 + k*F/2].x;
+					temp5 += thetaTemp[tile_x/2 + k*F/2].x * thetaTemp[tile_y/2 +2 + k*F/2].y;
+					temp6 += thetaTemp[tile_x/2 + k*F/2].x * thetaTemp[tile_y/2 +3 + k*F/2].x;
+					temp7 += thetaTemp[tile_x/2 + k*F/2].x * thetaTemp[tile_y/2 +3 + k*F/2].y;
+					temp8 += thetaTemp[tile_x/2 + k*F/2].x * thetaTemp[tile_y/2 +4 + k*F/2].x;
+					temp9 += thetaTemp[tile_x/2 + k*F/2].x * thetaTemp[tile_y/2 +4 + k*F/2].y;
+
+					temp10 += thetaTemp[tile_x/2 + k*F/2].y * thetaTemp[tile_y/2 + k*F/2].x;
+					temp11 += thetaTemp[tile_x/2 + k*F/2].y * thetaTemp[tile_y/2 + k*F/2].y;
+					temp12 += thetaTemp[tile_x/2 + k*F/2].y * thetaTemp[tile_y/2 +1 + k*F/2].x;
+					temp13 += thetaTemp[tile_x/2 + k*F/2].y * thetaTemp[tile_y/2 +1 + k*F/2].y;
+					temp14 += thetaTemp[tile_x/2 + k*F/2].y * thetaTemp[tile_y/2 +2 + k*F/2].x;
+					temp15 += thetaTemp[tile_x/2 + k*F/2].y * thetaTemp[tile_y/2 +2 + k*F/2].y;
+					temp16 += thetaTemp[tile_x/2 + k*F/2].y * thetaTemp[tile_y/2 +3 + k*F/2].x;
+					temp17 += thetaTemp[tile_x/2 + k*F/2].y * thetaTemp[tile_y/2 +3 + k*F/2].y;
+					temp18 += thetaTemp[tile_x/2 + k*F/2].y * thetaTemp[tile_y/2 +4 + k*F/2].x;
+					temp19 += thetaTemp[tile_x/2 + k*F/2].y * thetaTemp[tile_y/2 +4 + k*F/2].y;
+
+					temp20 += thetaTemp[tile_x/2 +1 + k*F/2].x * thetaTemp[tile_y/2 + k*F/2].x;
+					temp21 += thetaTemp[tile_x/2 +1 + k*F/2].x * thetaTemp[tile_y/2 + k*F/2].y;
+					temp22 += thetaTemp[tile_x/2 +1 + k*F/2].x * thetaTemp[tile_y/2 +1 + k*F/2].x;
+					temp23 += thetaTemp[tile_x/2 +1 + k*F/2].x * thetaTemp[tile_y/2 +1 + k*F/2].y;
+					temp24 += thetaTemp[tile_x/2 +1 + k*F/2].x * thetaTemp[tile_y/2 +2 + k*F/2].x;
+					temp25 += thetaTemp[tile_x/2 +1 + k*F/2].x * thetaTemp[tile_y/2 +2 + k*F/2].y;
+					temp26 += thetaTemp[tile_x/2 +1 + k*F/2].x * thetaTemp[tile_y/2 +3 + k*F/2].x;
+					temp27 += thetaTemp[tile_x/2 +1 + k*F/2].x * thetaTemp[tile_y/2 +3 + k*F/2].y;
+					temp28 += thetaTemp[tile_x/2 +1 + k*F/2].x * thetaTemp[tile_y/2 +4 + k*F/2].x;
+					temp29 += thetaTemp[tile_x/2 +1 + k*F/2].x * thetaTemp[tile_y/2 +4 + k*F/2].y;
+
+					temp30 += thetaTemp[tile_x/2 +1 + k*F/2].y * thetaTemp[tile_y/2 + k*F/2].x;
+					temp31 += thetaTemp[tile_x/2 +1 + k*F/2].y * thetaTemp[tile_y/2 + k*F/2].y;
+					temp32 += thetaTemp[tile_x/2 +1 + k*F/2].y * thetaTemp[tile_y/2 +1 + k*F/2].x;
+					temp33 += thetaTemp[tile_x/2 +1 + k*F/2].y * thetaTemp[tile_y/2 +1 + k*F/2].y;
+					temp34 += thetaTemp[tile_x/2 +1 + k*F/2].y * thetaTemp[tile_y/2 +2 + k*F/2].x;
+					temp35 += thetaTemp[tile_x/2 +1 + k*F/2].y * thetaTemp[tile_y/2 +2 + k*F/2].y;
+					temp36 += thetaTemp[tile_x/2 +1 + k*F/2].y * thetaTemp[tile_y/2 +3 + k*F/2].x;
+					temp37 += thetaTemp[tile_x/2 +1 + k*F/2].y * thetaTemp[tile_y/2 +3 + k*F/2].y;
+					temp38 += thetaTemp[tile_x/2 +1 + k*F/2].y * thetaTemp[tile_y/2 +4 + k*F/2].x;
+					temp39 += thetaTemp[tile_x/2 +1 + k*F/2].y * thetaTemp[tile_y/2 +4 + k*F/2].y;
+
+					temp40 += thetaTemp[tile_x/2 +2 + k*F/2].x * thetaTemp[tile_y/2 + k*F/2].x;
+					temp41 += thetaTemp[tile_x/2 +2 + k*F/2].x * thetaTemp[tile_y/2 + k*F/2].y;
+					temp42 += thetaTemp[tile_x/2 +2 + k*F/2].x * thetaTemp[tile_y/2 +1 + k*F/2].x;
+					temp43 += thetaTemp[tile_x/2 +2 + k*F/2].x * thetaTemp[tile_y/2 +1 + k*F/2].y;
+					temp44 += thetaTemp[tile_x/2 +2 + k*F/2].x * thetaTemp[tile_y/2 +2 + k*F/2].x;
+					temp45 += thetaTemp[tile_x/2 +2 + k*F/2].x * thetaTemp[tile_y/2 +2 + k*F/2].y;
+					temp46 += thetaTemp[tile_x/2 +2 + k*F/2].x * thetaTemp[tile_y/2 +3 + k*F/2].x;
+					temp47 += thetaTemp[tile_x/2 +2 + k*F/2].x * thetaTemp[tile_y/2 +3 + k*F/2].y;
+					temp48 += thetaTemp[tile_x/2 +2 + k*F/2].x * thetaTemp[tile_y/2 +4 + k*F/2].x;
+					temp49 += thetaTemp[tile_x/2 +2 + k*F/2].x * thetaTemp[tile_y/2 +4 + k*F/2].y;
+
+					temp50 += thetaTemp[tile_x/2 +2 + k*F/2].y * thetaTemp[tile_y/2 + k*F/2].x;
+					temp51 += thetaTemp[tile_x/2 +2 + k*F/2].y * thetaTemp[tile_y/2 + k*F/2].y;
+					temp52 += thetaTemp[tile_x/2 +2 + k*F/2].y * thetaTemp[tile_y/2 +1 + k*F/2].x;
+					temp53 += thetaTemp[tile_x/2 +2 + k*F/2].y * thetaTemp[tile_y/2 +1 + k*F/2].y;
+					temp54 += thetaTemp[tile_x/2 +2 + k*F/2].y * thetaTemp[tile_y/2 +2 + k*F/2].x;
+					temp55 += thetaTemp[tile_x/2 +2 + k*F/2].y * thetaTemp[tile_y/2 +2 + k*F/2].y;
+					temp56 += thetaTemp[tile_x/2 +2 + k*F/2].y * thetaTemp[tile_y/2 +3 + k*F/2].x;
+					temp57 += thetaTemp[tile_x/2 +2 + k*F/2].y * thetaTemp[tile_y/2 +3 + k*F/2].y;
+					temp58 += thetaTemp[tile_x/2 +2 + k*F/2].y * thetaTemp[tile_y/2 +4 + k*F/2].x;
+					temp59 += thetaTemp[tile_x/2 +2 + k*F/2].y * thetaTemp[tile_y/2 +4 + k*F/2].y;
+
+					temp60 += thetaTemp[tile_x/2 +3 + k*F/2].x * thetaTemp[tile_y/2 + k*F/2].x;
+					temp61 += thetaTemp[tile_x/2 +3 + k*F/2].x * thetaTemp[tile_y/2 + k*F/2].y;
+					temp62 += thetaTemp[tile_x/2 +3 + k*F/2].x * thetaTemp[tile_y/2 +1 + k*F/2].x;
+					temp63 += thetaTemp[tile_x/2 +3 + k*F/2].x * thetaTemp[tile_y/2 +1 + k*F/2].y;
+					temp64 += thetaTemp[tile_x/2 +3 + k*F/2].x * thetaTemp[tile_y/2 +2 + k*F/2].x;
+					temp65 += thetaTemp[tile_x/2 +3 + k*F/2].x * thetaTemp[tile_y/2 +2 + k*F/2].y;
+					temp66 += thetaTemp[tile_x/2 +3 + k*F/2].x * thetaTemp[tile_y/2 +3 + k*F/2].x;
+					temp67 += thetaTemp[tile_x/2 +3 + k*F/2].x * thetaTemp[tile_y/2 +3 + k*F/2].y;
+					temp68 += thetaTemp[tile_x/2 +3 + k*F/2].x * thetaTemp[tile_y/2 +4 + k*F/2].x;
+					temp69 += thetaTemp[tile_x/2 +3 + k*F/2].x * thetaTemp[tile_y/2 +4 + k*F/2].y;
+
+					temp70 += thetaTemp[tile_x/2 +3 + k*F/2].y * thetaTemp[tile_y/2 + k*F/2].x;
+					temp71 += thetaTemp[tile_x/2 +3 + k*F/2].y * thetaTemp[tile_y/2 + k*F/2].y;
+					temp72 += thetaTemp[tile_x/2 +3 + k*F/2].y * thetaTemp[tile_y/2 +1 + k*F/2].x;
+					temp73 += thetaTemp[tile_x/2 +3 + k*F/2].y * thetaTemp[tile_y/2 +1 + k*F/2].y;
+					temp74 += thetaTemp[tile_x/2 +3 + k*F/2].y * thetaTemp[tile_y/2 +2 + k*F/2].x;
+					temp75 += thetaTemp[tile_x/2 +3 + k*F/2].y * thetaTemp[tile_y/2 +2 + k*F/2].y;
+					temp76 += thetaTemp[tile_x/2 +3 + k*F/2].y * thetaTemp[tile_y/2 +3 + k*F/2].x;
+					temp77 += thetaTemp[tile_x/2 +3 + k*F/2].y * thetaTemp[tile_y/2 +3 + k*F/2].y;
+					temp78 += thetaTemp[tile_x/2 +3 + k*F/2].y * thetaTemp[tile_y/2 +4 + k*F/2].x;
+					temp79 += thetaTemp[tile_x/2 +3 + k*F/2].y * thetaTemp[tile_y/2 +4 + k*F/2].y;
+
+					temp80 += thetaTemp[tile_x/2 +4 + k*F/2].x * thetaTemp[tile_y/2 + k*F/2].x;
+					temp81 += thetaTemp[tile_x/2 +4 + k*F/2].x * thetaTemp[tile_y/2 + k*F/2].y;
+					temp82 += thetaTemp[tile_x/2 +4 + k*F/2].x * thetaTemp[tile_y/2 +1 + k*F/2].x;
+					temp83 += thetaTemp[tile_x/2 +4 + k*F/2].x * thetaTemp[tile_y/2 +1 + k*F/2].y;
+					temp84 += thetaTemp[tile_x/2 +4 + k*F/2].x * thetaTemp[tile_y/2 +2 + k*F/2].x;
+					temp85 += thetaTemp[tile_x/2 +4 + k*F/2].x * thetaTemp[tile_y/2 +2 + k*F/2].y;
+					temp86 += thetaTemp[tile_x/2 +4 + k*F/2].x * thetaTemp[tile_y/2 +3 + k*F/2].x;
+					temp87 += thetaTemp[tile_x/2 +4 + k*F/2].x * thetaTemp[tile_y/2 +3 + k*F/2].y;
+					temp88 += thetaTemp[tile_x/2 +4 + k*F/2].x * thetaTemp[tile_y/2 +4 + k*F/2].x;
+					temp89 += thetaTemp[tile_x/2 +4 + k*F/2].x * thetaTemp[tile_y/2 +4 + k*F/2].y;
+
+					temp90 += thetaTemp[tile_x/2 +4 + k*F/2].y * thetaTemp[tile_y/2 + k*F/2].x;
+					temp91 += thetaTemp[tile_x/2 +4 + k*F/2].y * thetaTemp[tile_y/2 + k*F/2].y;
+					temp92 += thetaTemp[tile_x/2 +4 + k*F/2].y * thetaTemp[tile_y/2 +1 + k*F/2].x;
+					temp93 += thetaTemp[tile_x/2 +4 + k*F/2].y * thetaTemp[tile_y/2 +1 + k*F/2].y;
+					temp94 += thetaTemp[tile_x/2 +4 + k*F/2].y * thetaTemp[tile_y/2 +2 + k*F/2].x;
+					temp95 += thetaTemp[tile_x/2 +4 + k*F/2].y * thetaTemp[tile_y/2 +2 + k*F/2].y;
+					temp96 += thetaTemp[tile_x/2 +4 + k*F/2].y * thetaTemp[tile_y/2 +3 + k*F/2].x;
+					temp97 += thetaTemp[tile_x/2 +4 + k*F/2].y * thetaTemp[tile_y/2 +3 + k*F/2].y;
+					temp98 += thetaTemp[tile_x/2 +4 + k*F/2].y * thetaTemp[tile_y/2 +4 + k*F/2].x;
+					temp99 += thetaTemp[tile_x/2 +4 + k*F/2].y * thetaTemp[tile_y/2 +4 + k*F/2].y;				}
+			}
+		}
+		//end of iteration in copying from smem and aggregating in register
+		__syncthreads();
+
+		if(threadIdx.x < 55 ){
+			//copy output to gmem
+			int index = blockIdx.x*F*F;
+			tt[index + tile_x + tile_y*F] = temp0;
+			tt[index + tile_x + (tile_y + 1)*F] = temp1;
+			tt[index + tile_x + (tile_y + 2)*F] = temp2;
+			tt[index + tile_x + (tile_y + 3)*F] = temp3;
+			tt[index + tile_x + (tile_y + 4)*F] = temp4;
+			tt[index + tile_x + (tile_y + 5)*F] = temp5;
+			tt[index + tile_x + (tile_y + 6)*F] = temp6;
+			tt[index + tile_x + (tile_y + 7)*F] = temp7;
+			tt[index + tile_x + (tile_y + 8)*F] = temp8;
+			tt[index + tile_x + (tile_y + 9)*F] = temp9;
+
+			tt[index + tile_x + 1 + tile_y*F] = temp10;
+			tt[index + tile_x + 1 + (tile_y + 1)*F] = temp11;
+			tt[index + tile_x + 1 + (tile_y + 2)*F] = temp12;
+			tt[index + tile_x + 1 + (tile_y + 3)*F] = temp13;
+			tt[index + tile_x + 1 + (tile_y + 4)*F] = temp14;
+			tt[index + tile_x + 1 + (tile_y + 5)*F] = temp15;
+			tt[index + tile_x + 1 + (tile_y + 6)*F] = temp16;
+			tt[index + tile_x + 1 + (tile_y + 7)*F] = temp17;
+			tt[index + tile_x + 1 + (tile_y + 8)*F] = temp18;
+			tt[index + tile_x + 1 + (tile_y + 9)*F] = temp19;
+
+			tt[index + tile_x + 2 + tile_y*F] = temp20;
+			tt[index + tile_x + 2 + (tile_y + 1)*F] = temp21;
+			tt[index + tile_x + 2 + (tile_y + 2)*F] = temp22;
+			tt[index + tile_x + 2 + (tile_y + 3)*F] = temp23;
+			tt[index + tile_x + 2 + (tile_y + 4)*F] = temp24;
+			tt[index + tile_x + 2 + (tile_y + 5)*F] = temp25;
+			tt[index + tile_x + 2 + (tile_y + 6)*F] = temp26;
+			tt[index + tile_x + 2 + (tile_y + 7)*F] = temp27;
+			tt[index + tile_x + 2 + (tile_y + 8)*F] = temp28;
+			tt[index + tile_x + 2 + (tile_y + 9)*F] = temp29;
+
+			tt[index + tile_x + 3 + tile_y*F] = temp30;
+			tt[index + tile_x + 3 + (tile_y + 1)*F] = temp31;
+			tt[index + tile_x + 3 + (tile_y + 2)*F] = temp32;
+			tt[index + tile_x + 3 + (tile_y + 3)*F] = temp33;
+			tt[index + tile_x + 3 + (tile_y + 4)*F] = temp34;
+			tt[index + tile_x + 3 + (tile_y + 5)*F] = temp35;
+			tt[index + tile_x + 3 + (tile_y + 6)*F] = temp36;
+			tt[index + tile_x + 3 + (tile_y + 7)*F] = temp37;
+			tt[index + tile_x + 3 + (tile_y + 8)*F] = temp38;
+			tt[index + tile_x + 3 + (tile_y + 9)*F] = temp39;
+
+			tt[index + tile_x + 4 + tile_y*F] = temp0;
+			tt[index + tile_x + 4 + (tile_y + 1)*F] = temp41;
+			tt[index + tile_x + 4 + (tile_y + 2)*F] = temp42;
+			tt[index + tile_x + 4 + (tile_y + 3)*F] = temp43;
+			tt[index + tile_x + 4 + (tile_y + 4)*F] = temp44;
+			tt[index + tile_x + 4 + (tile_y + 5)*F] = temp45;
+			tt[index + tile_x + 4 + (tile_y + 6)*F] = temp46;
+			tt[index + tile_x + 4 + (tile_y + 7)*F] = temp47;
+			tt[index + tile_x + 4 + (tile_y + 8)*F] = temp48;
+			tt[index + tile_x + 4 + (tile_y + 9)*F] = temp49;
+
+			tt[index + tile_x + 5 + tile_y*F] = temp50;
+			tt[index + tile_x + 5 + (tile_y + 1)*F] = temp51;
+			tt[index + tile_x + 5 + (tile_y + 2)*F] = temp52;
+			tt[index + tile_x + 5 + (tile_y + 3)*F] = temp53;
+			tt[index + tile_x + 5 + (tile_y + 4)*F] = temp54;
+			tt[index + tile_x + 5 + (tile_y + 5)*F] = temp55;
+			tt[index + tile_x + 5 + (tile_y + 6)*F] = temp56;
+			tt[index + tile_x + 5 + (tile_y + 7)*F] = temp57;
+			tt[index + tile_x + 5 + (tile_y + 8)*F] = temp58;
+			tt[index + tile_x + 5 + (tile_y + 9)*F] = temp59;
+
+			tt[index + tile_x + 6 + tile_y*F] = temp60;
+			tt[index + tile_x + 6 + (tile_y + 1)*F] = temp61;
+			tt[index + tile_x + 6 + (tile_y + 2)*F] = temp62;
+			tt[index + tile_x + 6 + (tile_y + 3)*F] = temp63;
+			tt[index + tile_x + 6 + (tile_y + 4)*F] = temp64;
+			tt[index + tile_x + 6 + (tile_y + 5)*F] = temp65;
+			tt[index + tile_x + 6 + (tile_y + 6)*F] = temp66;
+			tt[index + tile_x + 6 + (tile_y + 7)*F] = temp67;
+			tt[index + tile_x + 6 + (tile_y + 8)*F] = temp68;
+			tt[index + tile_x + 6 + (tile_y + 9)*F] = temp69;
+
+			tt[index + tile_x + 7 + tile_y*F] = temp70;
+			tt[index + tile_x + 7 + (tile_y + 1)*F] = temp71;
+			tt[index + tile_x + 7 + (tile_y + 2)*F] = temp72;
+			tt[index + tile_x + 7 + (tile_y + 3)*F] = temp73;
+			tt[index + tile_x + 7 + (tile_y + 4)*F] = temp74;
+			tt[index + tile_x + 7 + (tile_y + 5)*F] = temp75;
+			tt[index + tile_x + 7 + (tile_y + 6)*F] = temp76;
+			tt[index + tile_x + 7 + (tile_y + 7)*F] = temp77;
+			tt[index + tile_x + 7 + (tile_y + 8)*F] = temp78;
+			tt[index + tile_x + 7 + (tile_y + 9)*F] = temp79;
+
+			tt[index + tile_x + 8 + tile_y*F] = temp80;
+			tt[index + tile_x + 8 + (tile_y + 1)*F] = temp81;
+			tt[index + tile_x + 8 + (tile_y + 2)*F] = temp82;
+			tt[index + tile_x + 8 + (tile_y + 3)*F] = temp83;
+			tt[index + tile_x + 8 + (tile_y + 4)*F] = temp84;
+			tt[index + tile_x + 8 + (tile_y + 5)*F] = temp85;
+			tt[index + tile_x + 8 + (tile_y + 6)*F] = temp86;
+			tt[index + tile_x + 8 + (tile_y + 7)*F] = temp87;
+			tt[index + tile_x + 8 + (tile_y + 8)*F] = temp88;
+			tt[index + tile_x + 8 + (tile_y + 9)*F] = temp89;
+
+			tt[index + tile_x + 9 + tile_y*F] = temp90;
+			tt[index + tile_x + 9 + (tile_y + 1)*F] = temp91;
+			tt[index + tile_x + 9 + (tile_y + 2)*F] = temp92;
+			tt[index + tile_x + 9 + (tile_y + 3)*F] = temp93;
+			tt[index + tile_x + 9 + (tile_y + 4)*F] = temp94;
+			tt[index + tile_x + 9 + (tile_y + 5)*F] = temp95;
+			tt[index + tile_x + 9 + (tile_y + 6)*F] = temp96;
+			tt[index + tile_x + 9 + (tile_y + 7)*F] = temp97;
+			tt[index + tile_x + 9 + (tile_y + 8)*F] = temp98;
+			tt[index + tile_x + 9 + (tile_y + 9)*F] = temp99;
+
+			//symmetric
+			if(tile_x!=tile_y){
+				tt[index + tile_y + 0+ (tile_x + 0)*F]= temp0;
+				tt[index + tile_y + 1+ (tile_x + 0)*F]= temp1;
+				tt[index + tile_y + 2+ (tile_x + 0)*F]= temp2;
+				tt[index + tile_y + 3+ (tile_x + 0)*F]= temp3;
+				tt[index + tile_y + 4+ (tile_x + 0)*F]= temp4;
+				tt[index + tile_y + 5+ (tile_x + 0)*F]= temp5;
+				tt[index + tile_y + 6+ (tile_x + 0)*F]= temp6;
+				tt[index + tile_y + 7+ (tile_x + 0)*F]= temp7;
+				tt[index + tile_y + 8+ (tile_x + 0)*F]= temp8;
+				tt[index + tile_y + 9+ (tile_x + 0)*F]= temp9;
+
+
+				tt[index + tile_y + 0+ (tile_x + 1)*F]= temp10;
+				tt[index + tile_y + 1+ (tile_x + 1)*F]= temp11;
+				tt[index + tile_y + 2+ (tile_x + 1)*F]= temp12;
+				tt[index + tile_y + 3+ (tile_x + 1)*F]= temp13;
+				tt[index + tile_y + 4+ (tile_x + 1)*F]= temp14;
+				tt[index + tile_y + 5+ (tile_x + 1)*F]= temp15;
+				tt[index + tile_y + 6+ (tile_x + 1)*F]= temp16;
+				tt[index + tile_y + 7+ (tile_x + 1)*F]= temp17;
+				tt[index + tile_y + 8+ (tile_x + 1)*F]= temp18;
+				tt[index + tile_y + 9+ (tile_x + 1)*F]= temp19;
+
+
+				tt[index + tile_y + 0+ (tile_x + 2)*F]= temp20;
+				tt[index + tile_y + 1+ (tile_x + 2)*F]= temp21;
+				tt[index + tile_y + 2+ (tile_x + 2)*F]= temp22;
+				tt[index + tile_y + 3+ (tile_x + 2)*F]= temp23;
+				tt[index + tile_y + 4+ (tile_x + 2)*F]= temp24;
+				tt[index + tile_y + 5+ (tile_x + 2)*F]= temp25;
+				tt[index + tile_y + 6+ (tile_x + 2)*F]= temp26;
+				tt[index + tile_y + 7+ (tile_x + 2)*F]= temp27;
+				tt[index + tile_y + 8+ (tile_x + 2)*F]= temp28;
+				tt[index + tile_y + 9+ (tile_x + 2)*F]= temp29;
+
+
+				tt[index + tile_y + 0+ (tile_x + 3)*F]= temp30;
+				tt[index + tile_y + 1+ (tile_x + 3)*F]= temp31;
+				tt[index + tile_y + 2+ (tile_x + 3)*F]= temp32;
+				tt[index + tile_y + 3+ (tile_x + 3)*F]= temp33;
+				tt[index + tile_y + 4+ (tile_x + 3)*F]= temp34;
+				tt[index + tile_y + 5+ (tile_x + 3)*F]= temp35;
+				tt[index + tile_y + 6+ (tile_x + 3)*F]= temp36;
+				tt[index + tile_y + 7+ (tile_x + 3)*F]= temp37;
+				tt[index + tile_y + 8+ (tile_x + 3)*F]= temp38;
+				tt[index + tile_y + 9+ (tile_x + 3)*F]= temp39;
+
+
+				tt[index + tile_y + 0+ (tile_x + 4)*F]= temp40;
+				tt[index + tile_y + 1+ (tile_x + 4)*F]= temp41;
+				tt[index + tile_y + 2+ (tile_x + 4)*F]= temp42;
+				tt[index + tile_y + 3+ (tile_x + 4)*F]= temp43;
+				tt[index + tile_y + 4+ (tile_x + 4)*F]= temp44;
+				tt[index + tile_y + 5+ (tile_x + 4)*F]= temp45;
+				tt[index + tile_y + 6+ (tile_x + 4)*F]= temp46;
+				tt[index + tile_y + 7+ (tile_x + 4)*F]= temp47;
+				tt[index + tile_y + 8+ (tile_x + 4)*F]= temp48;
+				tt[index + tile_y + 9+ (tile_x + 4)*F]= temp49;
+
+
+				tt[index + tile_y + 0+ (tile_x + 5)*F]= temp50;
+				tt[index + tile_y + 1+ (tile_x + 5)*F]= temp51;
+				tt[index + tile_y + 2+ (tile_x + 5)*F]= temp52;
+				tt[index + tile_y + 3+ (tile_x + 5)*F]= temp53;
+				tt[index + tile_y + 4+ (tile_x + 5)*F]= temp54;
+				tt[index + tile_y + 5+ (tile_x + 5)*F]= temp55;
+				tt[index + tile_y + 6+ (tile_x + 5)*F]= temp56;
+				tt[index + tile_y + 7+ (tile_x + 5)*F]= temp57;
+				tt[index + tile_y + 8+ (tile_x + 5)*F]= temp58;
+				tt[index + tile_y + 9+ (tile_x + 5)*F]= temp59;
+
+
+				tt[index + tile_y + 0+ (tile_x + 6)*F]= temp60;
+				tt[index + tile_y + 1+ (tile_x + 6)*F]= temp61;
+				tt[index + tile_y + 2+ (tile_x + 6)*F]= temp62;
+				tt[index + tile_y + 3+ (tile_x + 6)*F]= temp63;
+				tt[index + tile_y + 4+ (tile_x + 6)*F]= temp64;
+				tt[index + tile_y + 5+ (tile_x + 6)*F]= temp65;
+				tt[index + tile_y + 6+ (tile_x + 6)*F]= temp66;
+				tt[index + tile_y + 7+ (tile_x + 6)*F]= temp67;
+				tt[index + tile_y + 8+ (tile_x + 6)*F]= temp68;
+				tt[index + tile_y + 9+ (tile_x + 6)*F]= temp69;
+
+
+				tt[index + tile_y + 0+ (tile_x + 7)*F]= temp70;
+				tt[index + tile_y + 1+ (tile_x + 7)*F]= temp71;
+				tt[index + tile_y + 2+ (tile_x + 7)*F]= temp72;
+				tt[index + tile_y + 3+ (tile_x + 7)*F]= temp73;
+				tt[index + tile_y + 4+ (tile_x + 7)*F]= temp74;
+				tt[index + tile_y + 5+ (tile_x + 7)*F]= temp75;
+				tt[index + tile_y + 6+ (tile_x + 7)*F]= temp76;
+				tt[index + tile_y + 7+ (tile_x + 7)*F]= temp77;
+				tt[index + tile_y + 8+ (tile_x + 7)*F]= temp78;
+				tt[index + tile_y + 9+ (tile_x + 7)*F]= temp79;
+
+
+				tt[index + tile_y + 0+ (tile_x + 8)*F]= temp80;
+				tt[index + tile_y + 1+ (tile_x + 8)*F]= temp81;
+				tt[index + tile_y + 2+ (tile_x + 8)*F]= temp82;
+				tt[index + tile_y + 3+ (tile_x + 8)*F]= temp83;
+				tt[index + tile_y + 4+ (tile_x + 8)*F]= temp84;
+				tt[index + tile_y + 5+ (tile_x + 8)*F]= temp85;
+				tt[index + tile_y + 6+ (tile_x + 8)*F]= temp86;
+				tt[index + tile_y + 7+ (tile_x + 8)*F]= temp87;
+				tt[index + tile_y + 8+ (tile_x + 8)*F]= temp88;
+				tt[index + tile_y + 9+ (tile_x + 8)*F]= temp89;
+
+
+				tt[index + tile_y + 0+ (tile_x + 9)*F]= temp90;
+				tt[index + tile_y + 1+ (tile_x + 9)*F]= temp91;
+				tt[index + tile_y + 2+ (tile_x + 9)*F]= temp92;
+				tt[index + tile_y + 3+ (tile_x + 9)*F]= temp93;
+				tt[index + tile_y + 4+ (tile_x + 9)*F]= temp94;
+				tt[index + tile_y + 5+ (tile_x + 9)*F]= temp95;
+				tt[index + tile_y + 6+ (tile_x + 9)*F]= temp96;
+				tt[index + tile_y + 7+ (tile_x + 9)*F]= temp97;
+				tt[index + tile_y + 8+ (tile_x + 9)*F]= temp98;
+				tt[index + tile_y + 9+ (tile_x + 9)*F]= temp99;
+			}
+			//regularization
+			if(tile_x == tile_y){
+				for(int k = 0; k < tile; k++)
+					tt[index + (tile_x+k)*(1+F)] += (end - start) * lambda;
+			}
+		}
+	}
+}
+
+
+
+__global__ void
+__launch_bounds__(64, 6)
+get_hermitian100(const int batch_offset, float* tt,
+		const int* csrRowIndex, const int* csrColIndex, const float lambda, const int m, const int F,
+		const float* __restrict__ thetaT) {
+	extern __shared__ float2 thetaTemp[];
+	int row = blockIdx.x + batch_offset;
+	if (row < m) {
+		//this block needs to handle end - start thetaT columns
+		int start = csrRowIndex[row];
+		int end = csrRowIndex[row + 1];
+		//slide through [start, end] by window size SCAN_BATCH
+		int iterations = (end - start - 1)/SCAN_BATCH + 1;
+		float temp0= 0, temp1= 0, temp2= 0, temp3= 0, temp4= 0, temp5= 0, temp6= 0, temp7= 0, temp8= 0, temp9 = 0;
+		float temp10= 0, temp11= 0, temp12= 0, temp13= 0, temp14= 0, temp15= 0, temp16= 0, temp17= 0, temp18= 0, temp19 = 0;
+		float temp20= 0, temp21= 0, temp22= 0, temp23= 0, temp24= 0, temp25= 0, temp26= 0, temp27= 0, temp28= 0, temp29 = 0;
+		float temp30= 0, temp31= 0, temp32= 0, temp33= 0, temp34= 0, temp35= 0, temp36= 0, temp37= 0, temp38= 0, temp39 = 0;
+		float temp40= 0, temp41= 0, temp42= 0, temp43= 0, temp44= 0, temp45= 0, temp46= 0, temp47= 0, temp48= 0, temp49 = 0;
+		float temp50= 0, temp51= 0, temp52= 0, temp53= 0, temp54= 0, temp55= 0, temp56= 0, temp57= 0, temp58= 0, temp59 = 0;
+		float temp60= 0, temp61= 0, temp62= 0, temp63= 0, temp64= 0, temp65= 0, temp66= 0, temp67= 0, temp68= 0, temp69 = 0;
+		float temp70= 0, temp71= 0, temp72= 0, temp73= 0, temp74= 0, temp75= 0, temp76= 0, temp77= 0, temp78= 0, temp79 = 0;
+		float temp80= 0, temp81= 0, temp82= 0, temp83= 0, temp84= 0, temp85= 0, temp86= 0, temp87= 0, temp88= 0, temp89 = 0;
+		float temp90= 0, temp91= 0, temp92= 0, temp93= 0, temp94= 0, temp95= 0, temp96= 0, temp97= 0, temp98= 0, temp99 = 0;
+
+		int tile_x = 0;
+		int tile_y = 0;
+
+		int tile = F/10;
+		for ( int i = 0; i < 10; i++){
+			int end = ((20-i)*(i+1))/2;
+			if(threadIdx.x < end){
+				tile_x = i * tile;
+				tile_y = (10 + threadIdx.x - end) * tile;
+				break;
+			}
+		}
+		//iteration: copy gmem-->smem; aggregate smem-->register
+		for (int iter = 0; iter < iterations; iter ++){
+			float2 theta;
+			//copy texture --> smem, and sync
+/*
+			if(threadIdx.x < SCAN_BATCH){
+				if(iter*SCAN_BATCH + threadIdx.x < end - start){
+					for (int k = 0; k < F; k += 2){
+						theta.x = tex1Dfetch(thetaTTexRef, F * csrColIndex[start + iter*SCAN_BATCH + threadIdx.x] + k);
+						theta.y = tex1Dfetch(thetaTTexRef, F * csrColIndex[start + iter*SCAN_BATCH + threadIdx.x] + k+1);
+						thetaTemp[threadIdx.x * F/2 + k/2] = theta;
+					}
+				}
+				//must be the last iteration; no need to check
+				//not enough theta to copy, set zero
+				else
+					memset(&thetaTemp[threadIdx.x*F/2], 0, F*sizeof(float));
+			}
+*/
+
+			//two layers: warp divergence unless we split at 32
+			//require 32 >= SCAN_BATCH
+			if(threadIdx.x < 2*32 ){
+				//int index = threadIdx.x;
+				int index = threadIdx.x - (threadIdx.x/32)*32;	//0 to 31;
+				if(index < SCAN_BATCH){
+					if(iter*SCAN_BATCH + index < end - start){
+						//for (int k = 50*(threadIdx.x/32); k < 50*(threadIdx.x/32) + 50; k += 2){
+						//IMPORTANT: for loop has constant and identical start and end
+						if(threadIdx.x < 32){
+							for (int k = 0; k < 50; k += 2){
+								theta.x = __ldg(&thetaT[ F * csrColIndex[start + iter*SCAN_BATCH + index] + k]);
+								theta.y = __ldg(&thetaT[ F * csrColIndex[start + iter*SCAN_BATCH + index] + k+1]);
+								thetaTemp[index * F/2 + k/2] = theta;
+							}
+						}
+						else {
+							for (int k = 0; k < 50; k += 2){
+								theta.x = __ldg(&thetaT[ F * csrColIndex[start + iter*SCAN_BATCH + index] + k + 50]);
+								theta.y = __ldg(&thetaT[ F * csrColIndex[start + iter*SCAN_BATCH + index] + k + 51]);
+								thetaTemp[index * F/2 + k/2 + 25] = theta;
+							}
+						}
+					}
+					//must be the last iteration; no need to check
+					//not enough theta to copy, set zero
+					else
+						memset(&thetaTemp[index*F/2], 0, F*sizeof(float));
+				}
+			}
+
+
+/*			//issue: not coalesced access to csrColIndex
+			if(threadIdx.x < F && threadIdx.x%2 == 0){
+				for(int k = 0; k< SCAN_BATCH; k++){
+					if(iter*SCAN_BATCH + k < end - start){
+						theta.x = tex1Dfetch(thetaTTexRef, F * csrColIndex[start + iter*SCAN_BATCH + k] + threadIdx.x);
+						theta.y = tex1Dfetch(thetaTTexRef, F * csrColIndex[start + iter*SCAN_BATCH + k] + threadIdx.x +1);
+						thetaTemp[k * F/2 + threadIdx.x/2] = theta;
+					}
+					//must be the last iteration; no need to check
+					//not enough theta to copy, set zero
+					else
+						memset(&thetaTemp[k*F/2 + threadIdx.x/2], 0, 2*sizeof(float));
+				}
+			}
+*/
+/*
+			int layers = blockDim.x/SCAN_BATCH;	//100/30 = 3
+			//int height = blockDim.x/layers; //30
+			int y = threadIdx.x/SCAN_BATCH;//0,1,2,3; y==3 is not viable
+			//min(y, (layers-1)) * height
+			int y_start = y * 30;//0-29:0;30-59:30;60-89:60
+			int y_end = y_start + 30;	//0-29:30;30-59:60;60-89:90
+			if(y >= layers - 1) y_end = F;	//60-89:100
+			if(threadIdx.x - y_start < SCAN_BATCH){
+				if(iter*SCAN_BATCH + (threadIdx.x - y_start) < end - start){
+					for (int k = y_start; k < y_end; k += 2){
+						theta.x =
+								tex1Dfetch(thetaTTexRef, F * csrColIndex[start + iter*SCAN_BATCH + (threadIdx.x - y_start)] + k);
+						theta.y =
+								tex1Dfetch(thetaTTexRef, F * csrColIndex[start + iter*SCAN_BATCH + (threadIdx.x - y_start)] + k+1);
+						thetaTemp[(threadIdx.x - y_start)* F/2 + k/2] = theta;
+					}
+				}
+				//must be the last iteration; no need to check
+				//not enough theta to copy, set zero
+				else
+					memset(&thetaTemp[(threadIdx.x - y_start)*F/2 + y_start/2], 0, (y_end - y_start)*sizeof(float));
+			}
+
+*/
+			__syncthreads();
+
+			//tile: 10*10
+			if(threadIdx.x < 55 ){
+				for(int k = 0; k < SCAN_BATCH; k++){
+					temp0 += thetaTemp[tile_x/2 + k*F/2].x * thetaTemp[tile_y/2 + k*F/2].x;
+					temp1 += thetaTemp[tile_x/2 + k*F/2].x * thetaTemp[tile_y/2 + k*F/2].y;
+					temp2 += thetaTemp[tile_x/2 + k*F/2].x * thetaTemp[tile_y/2 +1 + k*F/2].x;
+					temp3 += thetaTemp[tile_x/2 + k*F/2].x * thetaTemp[tile_y/2 +1 + k*F/2].y;
+					temp4 += thetaTemp[tile_x/2 + k*F/2].x * thetaTemp[tile_y/2 +2 + k*F/2].x;
+					temp5 += thetaTemp[tile_x/2 + k*F/2].x * thetaTemp[tile_y/2 +2 + k*F/2].y;
+					temp6 += thetaTemp[tile_x/2 + k*F/2].x * thetaTemp[tile_y/2 +3 + k*F/2].x;
+					temp7 += thetaTemp[tile_x/2 + k*F/2].x * thetaTemp[tile_y/2 +3 + k*F/2].y;
+					temp8 += thetaTemp[tile_x/2 + k*F/2].x * thetaTemp[tile_y/2 +4 + k*F/2].x;
+					temp9 += thetaTemp[tile_x/2 + k*F/2].x * thetaTemp[tile_y/2 +4 + k*F/2].y;
+
+					temp10 += thetaTemp[tile_x/2 + k*F/2].y * thetaTemp[tile_y/2 + k*F/2].x;
+					temp11 += thetaTemp[tile_x/2 + k*F/2].y * thetaTemp[tile_y/2 + k*F/2].y;
+					temp12 += thetaTemp[tile_x/2 + k*F/2].y * thetaTemp[tile_y/2 +1 + k*F/2].x;
+					temp13 += thetaTemp[tile_x/2 + k*F/2].y * thetaTemp[tile_y/2 +1 + k*F/2].y;
+					temp14 += thetaTemp[tile_x/2 + k*F/2].y * thetaTemp[tile_y/2 +2 + k*F/2].x;
+					temp15 += thetaTemp[tile_x/2 + k*F/2].y * thetaTemp[tile_y/2 +2 + k*F/2].y;
+					temp16 += thetaTemp[tile_x/2 + k*F/2].y * thetaTemp[tile_y/2 +3 + k*F/2].x;
+					temp17 += thetaTemp[tile_x/2 + k*F/2].y * thetaTemp[tile_y/2 +3 + k*F/2].y;
+					temp18 += thetaTemp[tile_x/2 + k*F/2].y * thetaTemp[tile_y/2 +4 + k*F/2].x;
+					temp19 += thetaTemp[tile_x/2 + k*F/2].y * thetaTemp[tile_y/2 +4 + k*F/2].y;
+
+					temp20 += thetaTemp[tile_x/2 +1 + k*F/2].x * thetaTemp[tile_y/2 + k*F/2].x;
+					temp21 += thetaTemp[tile_x/2 +1 + k*F/2].x * thetaTemp[tile_y/2 + k*F/2].y;
+					temp22 += thetaTemp[tile_x/2 +1 + k*F/2].x * thetaTemp[tile_y/2 +1 + k*F/2].x;
+					temp23 += thetaTemp[tile_x/2 +1 + k*F/2].x * thetaTemp[tile_y/2 +1 + k*F/2].y;
+					temp24 += thetaTemp[tile_x/2 +1 + k*F/2].x * thetaTemp[tile_y/2 +2 + k*F/2].x;
+					temp25 += thetaTemp[tile_x/2 +1 + k*F/2].x * thetaTemp[tile_y/2 +2 + k*F/2].y;
+					temp26 += thetaTemp[tile_x/2 +1 + k*F/2].x * thetaTemp[tile_y/2 +3 + k*F/2].x;
+					temp27 += thetaTemp[tile_x/2 +1 + k*F/2].x * thetaTemp[tile_y/2 +3 + k*F/2].y;
+					temp28 += thetaTemp[tile_x/2 +1 + k*F/2].x * thetaTemp[tile_y/2 +4 + k*F/2].x;
+					temp29 += thetaTemp[tile_x/2 +1 + k*F/2].x * thetaTemp[tile_y/2 +4 + k*F/2].y;
+
+					temp30 += thetaTemp[tile_x/2 +1 + k*F/2].y * thetaTemp[tile_y/2 + k*F/2].x;
+					temp31 += thetaTemp[tile_x/2 +1 + k*F/2].y * thetaTemp[tile_y/2 + k*F/2].y;
+					temp32 += thetaTemp[tile_x/2 +1 + k*F/2].y * thetaTemp[tile_y/2 +1 + k*F/2].x;
+					temp33 += thetaTemp[tile_x/2 +1 + k*F/2].y * thetaTemp[tile_y/2 +1 + k*F/2].y;
+					temp34 += thetaTemp[tile_x/2 +1 + k*F/2].y * thetaTemp[tile_y/2 +2 + k*F/2].x;
+					temp35 += thetaTemp[tile_x/2 +1 + k*F/2].y * thetaTemp[tile_y/2 +2 + k*F/2].y;
+					temp36 += thetaTemp[tile_x/2 +1 + k*F/2].y * thetaTemp[tile_y/2 +3 + k*F/2].x;
+					temp37 += thetaTemp[tile_x/2 +1 + k*F/2].y * thetaTemp[tile_y/2 +3 + k*F/2].y;
+					temp38 += thetaTemp[tile_x/2 +1 + k*F/2].y * thetaTemp[tile_y/2 +4 + k*F/2].x;
+					temp39 += thetaTemp[tile_x/2 +1 + k*F/2].y * thetaTemp[tile_y/2 +4 + k*F/2].y;
+
+					temp40 += thetaTemp[tile_x/2 +2 + k*F/2].x * thetaTemp[tile_y/2 + k*F/2].x;
+					temp41 += thetaTemp[tile_x/2 +2 + k*F/2].x * thetaTemp[tile_y/2 + k*F/2].y;
+					temp42 += thetaTemp[tile_x/2 +2 + k*F/2].x * thetaTemp[tile_y/2 +1 + k*F/2].x;
+					temp43 += thetaTemp[tile_x/2 +2 + k*F/2].x * thetaTemp[tile_y/2 +1 + k*F/2].y;
+					temp44 += thetaTemp[tile_x/2 +2 + k*F/2].x * thetaTemp[tile_y/2 +2 + k*F/2].x;
+					temp45 += thetaTemp[tile_x/2 +2 + k*F/2].x * thetaTemp[tile_y/2 +2 + k*F/2].y;
+					temp46 += thetaTemp[tile_x/2 +2 + k*F/2].x * thetaTemp[tile_y/2 +3 + k*F/2].x;
+					temp47 += thetaTemp[tile_x/2 +2 + k*F/2].x * thetaTemp[tile_y/2 +3 + k*F/2].y;
+					temp48 += thetaTemp[tile_x/2 +2 + k*F/2].x * thetaTemp[tile_y/2 +4 + k*F/2].x;
+					temp49 += thetaTemp[tile_x/2 +2 + k*F/2].x * thetaTemp[tile_y/2 +4 + k*F/2].y;
+
+					temp50 += thetaTemp[tile_x/2 +2 + k*F/2].y * thetaTemp[tile_y/2 + k*F/2].x;
+					temp51 += thetaTemp[tile_x/2 +2 + k*F/2].y * thetaTemp[tile_y/2 + k*F/2].y;
+					temp52 += thetaTemp[tile_x/2 +2 + k*F/2].y * thetaTemp[tile_y/2 +1 + k*F/2].x;
+					temp53 += thetaTemp[tile_x/2 +2 + k*F/2].y * thetaTemp[tile_y/2 +1 + k*F/2].y;
+					temp54 += thetaTemp[tile_x/2 +2 + k*F/2].y * thetaTemp[tile_y/2 +2 + k*F/2].x;
+					temp55 += thetaTemp[tile_x/2 +2 + k*F/2].y * thetaTemp[tile_y/2 +2 + k*F/2].y;
+					temp56 += thetaTemp[tile_x/2 +2 + k*F/2].y * thetaTemp[tile_y/2 +3 + k*F/2].x;
+					temp57 += thetaTemp[tile_x/2 +2 + k*F/2].y * thetaTemp[tile_y/2 +3 + k*F/2].y;
+					temp58 += thetaTemp[tile_x/2 +2 + k*F/2].y * thetaTemp[tile_y/2 +4 + k*F/2].x;
+					temp59 += thetaTemp[tile_x/2 +2 + k*F/2].y * thetaTemp[tile_y/2 +4 + k*F/2].y;
+
+					temp60 += thetaTemp[tile_x/2 +3 + k*F/2].x * thetaTemp[tile_y/2 + k*F/2].x;
+					temp61 += thetaTemp[tile_x/2 +3 + k*F/2].x * thetaTemp[tile_y/2 + k*F/2].y;
+					temp62 += thetaTemp[tile_x/2 +3 + k*F/2].x * thetaTemp[tile_y/2 +1 + k*F/2].x;
+					temp63 += thetaTemp[tile_x/2 +3 + k*F/2].x * thetaTemp[tile_y/2 +1 + k*F/2].y;
+					temp64 += thetaTemp[tile_x/2 +3 + k*F/2].x * thetaTemp[tile_y/2 +2 + k*F/2].x;
+					temp65 += thetaTemp[tile_x/2 +3 + k*F/2].x * thetaTemp[tile_y/2 +2 + k*F/2].y;
+					temp66 += thetaTemp[tile_x/2 +3 + k*F/2].x * thetaTemp[tile_y/2 +3 + k*F/2].x;
+					temp67 += thetaTemp[tile_x/2 +3 + k*F/2].x * thetaTemp[tile_y/2 +3 + k*F/2].y;
+					temp68 += thetaTemp[tile_x/2 +3 + k*F/2].x * thetaTemp[tile_y/2 +4 + k*F/2].x;
+					temp69 += thetaTemp[tile_x/2 +3 + k*F/2].x * thetaTemp[tile_y/2 +4 + k*F/2].y;
+
+					temp70 += thetaTemp[tile_x/2 +3 + k*F/2].y * thetaTemp[tile_y/2 + k*F/2].x;
+					temp71 += thetaTemp[tile_x/2 +3 + k*F/2].y * thetaTemp[tile_y/2 + k*F/2].y;
+					temp72 += thetaTemp[tile_x/2 +3 + k*F/2].y * thetaTemp[tile_y/2 +1 + k*F/2].x;
+					temp73 += thetaTemp[tile_x/2 +3 + k*F/2].y * thetaTemp[tile_y/2 +1 + k*F/2].y;
+					temp74 += thetaTemp[tile_x/2 +3 + k*F/2].y * thetaTemp[tile_y/2 +2 + k*F/2].x;
+					temp75 += thetaTemp[tile_x/2 +3 + k*F/2].y * thetaTemp[tile_y/2 +2 + k*F/2].y;
+					temp76 += thetaTemp[tile_x/2 +3 + k*F/2].y * thetaTemp[tile_y/2 +3 + k*F/2].x;
+					temp77 += thetaTemp[tile_x/2 +3 + k*F/2].y * thetaTemp[tile_y/2 +3 + k*F/2].y;
+					temp78 += thetaTemp[tile_x/2 +3 + k*F/2].y * thetaTemp[tile_y/2 +4 + k*F/2].x;
+					temp79 += thetaTemp[tile_x/2 +3 + k*F/2].y * thetaTemp[tile_y/2 +4 + k*F/2].y;
+
+
+					temp80 += thetaTemp[tile_x/2 +4 + k*F/2].x * thetaTemp[tile_y/2 + k*F/2].x;
+					temp81 += thetaTemp[tile_x/2 +4 + k*F/2].x * thetaTemp[tile_y/2 + k*F/2].y;
+					temp82 += thetaTemp[tile_x/2 +4 + k*F/2].x * thetaTemp[tile_y/2 +1 + k*F/2].x;
+					temp83 += thetaTemp[tile_x/2 +4 + k*F/2].x * thetaTemp[tile_y/2 +1 + k*F/2].y;
+					temp84 += thetaTemp[tile_x/2 +4 + k*F/2].x * thetaTemp[tile_y/2 +2 + k*F/2].x;
+					temp85 += thetaTemp[tile_x/2 +4 + k*F/2].x * thetaTemp[tile_y/2 +2 + k*F/2].y;
+					temp86 += thetaTemp[tile_x/2 +4 + k*F/2].x * thetaTemp[tile_y/2 +3 + k*F/2].x;
+					temp87 += thetaTemp[tile_x/2 +4 + k*F/2].x * thetaTemp[tile_y/2 +3 + k*F/2].y;
+					temp88 += thetaTemp[tile_x/2 +4 + k*F/2].x * thetaTemp[tile_y/2 +4 + k*F/2].x;
+					temp89 += thetaTemp[tile_x/2 +4 + k*F/2].x * thetaTemp[tile_y/2 +4 + k*F/2].y;
+
+					temp90 += thetaTemp[tile_x/2 +4 + k*F/2].y * thetaTemp[tile_y/2 + k*F/2].x;
+					temp91 += thetaTemp[tile_x/2 +4 + k*F/2].y * thetaTemp[tile_y/2 + k*F/2].y;
+					temp92 += thetaTemp[tile_x/2 +4 + k*F/2].y * thetaTemp[tile_y/2 +1 + k*F/2].x;
+					temp93 += thetaTemp[tile_x/2 +4 + k*F/2].y * thetaTemp[tile_y/2 +1 + k*F/2].y;
+					temp94 += thetaTemp[tile_x/2 +4 + k*F/2].y * thetaTemp[tile_y/2 +2 + k*F/2].x;
+					temp95 += thetaTemp[tile_x/2 +4 + k*F/2].y * thetaTemp[tile_y/2 +2 + k*F/2].y;
+					temp96 += thetaTemp[tile_x/2 +4 + k*F/2].y * thetaTemp[tile_y/2 +3 + k*F/2].x;
+					temp97 += thetaTemp[tile_x/2 +4 + k*F/2].y * thetaTemp[tile_y/2 +3 + k*F/2].y;
+					temp98 += thetaTemp[tile_x/2 +4 + k*F/2].y * thetaTemp[tile_y/2 +4 + k*F/2].x;
+					temp99 += thetaTemp[tile_x/2 +4 + k*F/2].y * thetaTemp[tile_y/2 +4 + k*F/2].y;
+				}
+			}
+		}
+		//end of iteration in copying from smem and aggregating in register
+		__syncthreads();
+
+		if(threadIdx.x < 55 ){
+			//copy output to gmem
+			int index = blockIdx.x*F*F;
+			tt[index + tile_x + tile_y*F] = temp0;
+			tt[index + tile_x + (tile_y + 1)*F] = temp1;
+			tt[index + tile_x + (tile_y + 2)*F] = temp2;
+			tt[index + tile_x + (tile_y + 3)*F] = temp3;
+			tt[index + tile_x + (tile_y + 4)*F] = temp4;
+			tt[index + tile_x + (tile_y + 5)*F] = temp5;
+			tt[index + tile_x + (tile_y + 6)*F] = temp6;
+			tt[index + tile_x + (tile_y + 7)*F] = temp7;
+			tt[index + tile_x + (tile_y + 8)*F] = temp8;
+			tt[index + tile_x + (tile_y + 9)*F] = temp9;
+
+			tt[index + tile_x + 1 + tile_y*F] = temp10;
+			tt[index + tile_x + 1 + (tile_y + 1)*F] = temp11;
+			tt[index + tile_x + 1 + (tile_y + 2)*F] = temp12;
+			tt[index + tile_x + 1 + (tile_y + 3)*F] = temp13;
+			tt[index + tile_x + 1 + (tile_y + 4)*F] = temp14;
+			tt[index + tile_x + 1 + (tile_y + 5)*F] = temp15;
+			tt[index + tile_x + 1 + (tile_y + 6)*F] = temp16;
+			tt[index + tile_x + 1 + (tile_y + 7)*F] = temp17;
+			tt[index + tile_x + 1 + (tile_y + 8)*F] = temp18;
+			tt[index + tile_x + 1 + (tile_y + 9)*F] = temp19;
+
+			tt[index + tile_x + 2 + tile_y*F] = temp20;
+			tt[index + tile_x + 2 + (tile_y + 1)*F] = temp21;
+			tt[index + tile_x + 2 + (tile_y + 2)*F] = temp22;
+			tt[index + tile_x + 2 + (tile_y + 3)*F] = temp23;
+			tt[index + tile_x + 2 + (tile_y + 4)*F] = temp24;
+			tt[index + tile_x + 2 + (tile_y + 5)*F] = temp25;
+			tt[index + tile_x + 2 + (tile_y + 6)*F] = temp26;
+			tt[index + tile_x + 2 + (tile_y + 7)*F] = temp27;
+			tt[index + tile_x + 2 + (tile_y + 8)*F] = temp28;
+			tt[index + tile_x + 2 + (tile_y + 9)*F] = temp29;
+
+			tt[index + tile_x + 3 + tile_y*F] = temp30;
+			tt[index + tile_x + 3 + (tile_y + 1)*F] = temp31;
+			tt[index + tile_x + 3 + (tile_y + 2)*F] = temp32;
+			tt[index + tile_x + 3 + (tile_y + 3)*F] = temp33;
+			tt[index + tile_x + 3 + (tile_y + 4)*F] = temp34;
+			tt[index + tile_x + 3 + (tile_y + 5)*F] = temp35;
+			tt[index + tile_x + 3 + (tile_y + 6)*F] = temp36;
+			tt[index + tile_x + 3 + (tile_y + 7)*F] = temp37;
+			tt[index + tile_x + 3 + (tile_y + 8)*F] = temp38;
+			tt[index + tile_x + 3 + (tile_y + 9)*F] = temp39;
+
+			tt[index + tile_x + 4 + tile_y*F] = temp0;
+			tt[index + tile_x + 4 + (tile_y + 1)*F] = temp41;
+			tt[index + tile_x + 4 + (tile_y + 2)*F] = temp42;
+			tt[index + tile_x + 4 + (tile_y + 3)*F] = temp43;
+			tt[index + tile_x + 4 + (tile_y + 4)*F] = temp44;
+			tt[index + tile_x + 4 + (tile_y + 5)*F] = temp45;
+			tt[index + tile_x + 4 + (tile_y + 6)*F] = temp46;
+			tt[index + tile_x + 4 + (tile_y + 7)*F] = temp47;
+			tt[index + tile_x + 4 + (tile_y + 8)*F] = temp48;
+			tt[index + tile_x + 4 + (tile_y + 9)*F] = temp49;
+
+			tt[index + tile_x + 5 + tile_y*F] = temp50;
+			tt[index + tile_x + 5 + (tile_y + 1)*F] = temp51;
+			tt[index + tile_x + 5 + (tile_y + 2)*F] = temp52;
+			tt[index + tile_x + 5 + (tile_y + 3)*F] = temp53;
+			tt[index + tile_x + 5 + (tile_y + 4)*F] = temp54;
+			tt[index + tile_x + 5 + (tile_y + 5)*F] = temp55;
+			tt[index + tile_x + 5 + (tile_y + 6)*F] = temp56;
+			tt[index + tile_x + 5 + (tile_y + 7)*F] = temp57;
+			tt[index + tile_x + 5 + (tile_y + 8)*F] = temp58;
+			tt[index + tile_x + 5 + (tile_y + 9)*F] = temp59;
+
+			tt[index + tile_x + 6 + tile_y*F] = temp60;
+			tt[index + tile_x + 6 + (tile_y + 1)*F] = temp61;
+			tt[index + tile_x + 6 + (tile_y + 2)*F] = temp62;
+			tt[index + tile_x + 6 + (tile_y + 3)*F] = temp63;
+			tt[index + tile_x + 6 + (tile_y + 4)*F] = temp64;
+			tt[index + tile_x + 6 + (tile_y + 5)*F] = temp65;
+			tt[index + tile_x + 6 + (tile_y + 6)*F] = temp66;
+			tt[index + tile_x + 6 + (tile_y + 7)*F] = temp67;
+			tt[index + tile_x + 6 + (tile_y + 8)*F] = temp68;
+			tt[index + tile_x + 6 + (tile_y + 9)*F] = temp69;
+
+			tt[index + tile_x + 7 + tile_y*F] = temp70;
+			tt[index + tile_x + 7 + (tile_y + 1)*F] = temp71;
+			tt[index + tile_x + 7 + (tile_y + 2)*F] = temp72;
+			tt[index + tile_x + 7 + (tile_y + 3)*F] = temp73;
+			tt[index + tile_x + 7 + (tile_y + 4)*F] = temp74;
+			tt[index + tile_x + 7 + (tile_y + 5)*F] = temp75;
+			tt[index + tile_x + 7 + (tile_y + 6)*F] = temp76;
+			tt[index + tile_x + 7 + (tile_y + 7)*F] = temp77;
+			tt[index + tile_x + 7 + (tile_y + 8)*F] = temp78;
+			tt[index + tile_x + 7 + (tile_y + 9)*F] = temp79;
+
+			tt[index + tile_x + 8 + tile_y*F] = temp80;
+			tt[index + tile_x + 8 + (tile_y + 1)*F] = temp81;
+			tt[index + tile_x + 8 + (tile_y + 2)*F] = temp82;
+			tt[index + tile_x + 8 + (tile_y + 3)*F] = temp83;
+			tt[index + tile_x + 8 + (tile_y + 4)*F] = temp84;
+			tt[index + tile_x + 8 + (tile_y + 5)*F] = temp85;
+			tt[index + tile_x + 8 + (tile_y + 6)*F] = temp86;
+			tt[index + tile_x + 8 + (tile_y + 7)*F] = temp87;
+			tt[index + tile_x + 8 + (tile_y + 8)*F] = temp88;
+			tt[index + tile_x + 8 + (tile_y + 9)*F] = temp89;
+
+			tt[index + tile_x + 9 + tile_y*F] = temp90;
+			tt[index + tile_x + 9 + (tile_y + 1)*F] = temp91;
+			tt[index + tile_x + 9 + (tile_y + 2)*F] = temp92;
+			tt[index + tile_x + 9 + (tile_y + 3)*F] = temp93;
+			tt[index + tile_x + 9 + (tile_y + 4)*F] = temp94;
+			tt[index + tile_x + 9 + (tile_y + 5)*F] = temp95;
+			tt[index + tile_x + 9 + (tile_y + 6)*F] = temp96;
+			tt[index + tile_x + 9 + (tile_y + 7)*F] = temp97;
+			tt[index + tile_x + 9 + (tile_y + 8)*F] = temp98;
+			tt[index + tile_x + 9 + (tile_y + 9)*F] = temp99;
+
+			//symmetric
+			if(tile_x!=tile_y){
+				tt[index + tile_y + 0+ (tile_x + 0)*F]= temp0;
+				tt[index + tile_y + 1+ (tile_x + 0)*F]= temp1;
+				tt[index + tile_y + 2+ (tile_x + 0)*F]= temp2;
+				tt[index + tile_y + 3+ (tile_x + 0)*F]= temp3;
+				tt[index + tile_y + 4+ (tile_x + 0)*F]= temp4;
+				tt[index + tile_y + 5+ (tile_x + 0)*F]= temp5;
+				tt[index + tile_y + 6+ (tile_x + 0)*F]= temp6;
+				tt[index + tile_y + 7+ (tile_x + 0)*F]= temp7;
+				tt[index + tile_y + 8+ (tile_x + 0)*F]= temp8;
+				tt[index + tile_y + 9+ (tile_x + 0)*F]= temp9;
+
+
+				tt[index + tile_y + 0+ (tile_x + 1)*F]= temp10;
+				tt[index + tile_y + 1+ (tile_x + 1)*F]= temp11;
+				tt[index + tile_y + 2+ (tile_x + 1)*F]= temp12;
+				tt[index + tile_y + 3+ (tile_x + 1)*F]= temp13;
+				tt[index + tile_y + 4+ (tile_x + 1)*F]= temp14;
+				tt[index + tile_y + 5+ (tile_x + 1)*F]= temp15;
+				tt[index + tile_y + 6+ (tile_x + 1)*F]= temp16;
+				tt[index + tile_y + 7+ (tile_x + 1)*F]= temp17;
+				tt[index + tile_y + 8+ (tile_x + 1)*F]= temp18;
+				tt[index + tile_y + 9+ (tile_x + 1)*F]= temp19;
+
+
+				tt[index + tile_y + 0+ (tile_x + 2)*F]= temp20;
+				tt[index + tile_y + 1+ (tile_x + 2)*F]= temp21;
+				tt[index + tile_y + 2+ (tile_x + 2)*F]= temp22;
+				tt[index + tile_y + 3+ (tile_x + 2)*F]= temp23;
+				tt[index + tile_y + 4+ (tile_x + 2)*F]= temp24;
+				tt[index + tile_y + 5+ (tile_x + 2)*F]= temp25;
+				tt[index + tile_y + 6+ (tile_x + 2)*F]= temp26;
+				tt[index + tile_y + 7+ (tile_x + 2)*F]= temp27;
+				tt[index + tile_y + 8+ (tile_x + 2)*F]= temp28;
+				tt[index + tile_y + 9+ (tile_x + 2)*F]= temp29;
+
+
+				tt[index + tile_y + 0+ (tile_x + 3)*F]= temp30;
+				tt[index + tile_y + 1+ (tile_x + 3)*F]= temp31;
+				tt[index + tile_y + 2+ (tile_x + 3)*F]= temp32;
+				tt[index + tile_y + 3+ (tile_x + 3)*F]= temp33;
+				tt[index + tile_y + 4+ (tile_x + 3)*F]= temp34;
+				tt[index + tile_y + 5+ (tile_x + 3)*F]= temp35;
+				tt[index + tile_y + 6+ (tile_x + 3)*F]= temp36;
+				tt[index + tile_y + 7+ (tile_x + 3)*F]= temp37;
+				tt[index + tile_y + 8+ (tile_x + 3)*F]= temp38;
+				tt[index + tile_y + 9+ (tile_x + 3)*F]= temp39;
+
+
+				tt[index + tile_y + 0+ (tile_x + 4)*F]= temp40;
+				tt[index + tile_y + 1+ (tile_x + 4)*F]= temp41;
+				tt[index + tile_y + 2+ (tile_x + 4)*F]= temp42;
+				tt[index + tile_y + 3+ (tile_x + 4)*F]= temp43;
+				tt[index + tile_y + 4+ (tile_x + 4)*F]= temp44;
+				tt[index + tile_y + 5+ (tile_x + 4)*F]= temp45;
+				tt[index + tile_y + 6+ (tile_x + 4)*F]= temp46;
+				tt[index + tile_y + 7+ (tile_x + 4)*F]= temp47;
+				tt[index + tile_y + 8+ (tile_x + 4)*F]= temp48;
+				tt[index + tile_y + 9+ (tile_x + 4)*F]= temp49;
+
+
+				tt[index + tile_y + 0+ (tile_x + 5)*F]= temp50;
+				tt[index + tile_y + 1+ (tile_x + 5)*F]= temp51;
+				tt[index + tile_y + 2+ (tile_x + 5)*F]= temp52;
+				tt[index + tile_y + 3+ (tile_x + 5)*F]= temp53;
+				tt[index + tile_y + 4+ (tile_x + 5)*F]= temp54;
+				tt[index + tile_y + 5+ (tile_x + 5)*F]= temp55;
+				tt[index + tile_y + 6+ (tile_x + 5)*F]= temp56;
+				tt[index + tile_y + 7+ (tile_x + 5)*F]= temp57;
+				tt[index + tile_y + 8+ (tile_x + 5)*F]= temp58;
+				tt[index + tile_y + 9+ (tile_x + 5)*F]= temp59;
+
+
+				tt[index + tile_y + 0+ (tile_x + 6)*F]= temp60;
+				tt[index + tile_y + 1+ (tile_x + 6)*F]= temp61;
+				tt[index + tile_y + 2+ (tile_x + 6)*F]= temp62;
+				tt[index + tile_y + 3+ (tile_x + 6)*F]= temp63;
+				tt[index + tile_y + 4+ (tile_x + 6)*F]= temp64;
+				tt[index + tile_y + 5+ (tile_x + 6)*F]= temp65;
+				tt[index + tile_y + 6+ (tile_x + 6)*F]= temp66;
+				tt[index + tile_y + 7+ (tile_x + 6)*F]= temp67;
+				tt[index + tile_y + 8+ (tile_x + 6)*F]= temp68;
+				tt[index + tile_y + 9+ (tile_x + 6)*F]= temp69;
+
+
+				tt[index + tile_y + 0+ (tile_x + 7)*F]= temp70;
+				tt[index + tile_y + 1+ (tile_x + 7)*F]= temp71;
+				tt[index + tile_y + 2+ (tile_x + 7)*F]= temp72;
+				tt[index + tile_y + 3+ (tile_x + 7)*F]= temp73;
+				tt[index + tile_y + 4+ (tile_x + 7)*F]= temp74;
+				tt[index + tile_y + 5+ (tile_x + 7)*F]= temp75;
+				tt[index + tile_y + 6+ (tile_x + 7)*F]= temp76;
+				tt[index + tile_y + 7+ (tile_x + 7)*F]= temp77;
+				tt[index + tile_y + 8+ (tile_x + 7)*F]= temp78;
+				tt[index + tile_y + 9+ (tile_x + 7)*F]= temp79;
+
+
+				tt[index + tile_y + 0+ (tile_x + 8)*F]= temp80;
+				tt[index + tile_y + 1+ (tile_x + 8)*F]= temp81;
+				tt[index + tile_y + 2+ (tile_x + 8)*F]= temp82;
+				tt[index + tile_y + 3+ (tile_x + 8)*F]= temp83;
+				tt[index + tile_y + 4+ (tile_x + 8)*F]= temp84;
+				tt[index + tile_y + 5+ (tile_x + 8)*F]= temp85;
+				tt[index + tile_y + 6+ (tile_x + 8)*F]= temp86;
+				tt[index + tile_y + 7+ (tile_x + 8)*F]= temp87;
+				tt[index + tile_y + 8+ (tile_x + 8)*F]= temp88;
+				tt[index + tile_y + 9+ (tile_x + 8)*F]= temp89;
+
+
+				tt[index + tile_y + 0+ (tile_x + 9)*F]= temp90;
+				tt[index + tile_y + 1+ (tile_x + 9)*F]= temp91;
+				tt[index + tile_y + 2+ (tile_x + 9)*F]= temp92;
+				tt[index + tile_y + 3+ (tile_x + 9)*F]= temp93;
+				tt[index + tile_y + 4+ (tile_x + 9)*F]= temp94;
+				tt[index + tile_y + 5+ (tile_x + 9)*F]= temp95;
+				tt[index + tile_y + 6+ (tile_x + 9)*F]= temp96;
+				tt[index + tile_y + 7+ (tile_x + 9)*F]= temp97;
+				tt[index + tile_y + 8+ (tile_x + 9)*F]= temp98;
+				tt[index + tile_y + 9+ (tile_x + 9)*F]= temp99;
+			}
+			//regularization
+			if(tile_x == tile_y){
+				for(int k = 0; k < tile; k++)
+					tt[index + (tile_x+k)*(1+F)] += (end - start) * lambda;
+			}
+		}
+	}
+}
+
+/*a generic kernel to get the hermitian matrices
+ * as the left-hand side of the equations, to update X in ALS
+ *examplary F = 100, T = 10
+ */
+__global__ void
+get_hermitianT10(const int batch_offset, float* tt,
+		const int* csrRowIndex, const int* csrColIndex, const float lambda, const int m, const int F,
+		const float* __restrict__ thetaT) {
+	extern __shared__ float2 thetaTemp [];
+	int row = blockIdx.x + batch_offset;
+	if (row < m) {
+		//this block needs to handle end - start thetaT columns
+		int start = csrRowIndex[row];
+		int end = csrRowIndex[row + 1];
+		//slide through [start, end] by window size SCAN_BATCH
+		int iterations = (end - start - 1)/SCAN_BATCH + 1;
+		float temp0= 0, temp1= 0, temp2= 0, temp3= 0, temp4= 0, temp5= 0, temp6= 0, temp7= 0, temp8= 0, temp9 = 0;
+		float temp10= 0, temp11= 0, temp12= 0, temp13= 0, temp14= 0, temp15= 0, temp16= 0, temp17= 0, temp18= 0, temp19 = 0;
+		float temp20= 0, temp21= 0, temp22= 0, temp23= 0, temp24= 0, temp25= 0, temp26= 0, temp27= 0, temp28= 0, temp29 = 0;
+		float temp30= 0, temp31= 0, temp32= 0, temp33= 0, temp34= 0, temp35= 0, temp36= 0, temp37= 0, temp38= 0, temp39 = 0;
+		float temp40= 0, temp41= 0, temp42= 0, temp43= 0, temp44= 0, temp45= 0, temp46= 0, temp47= 0, temp48= 0, temp49 = 0;
+		float temp50= 0, temp51= 0, temp52= 0, temp53= 0, temp54= 0, temp55= 0, temp56= 0, temp57= 0, temp58= 0, temp59 = 0;
+		float temp60= 0, temp61= 0, temp62= 0, temp63= 0, temp64= 0, temp65= 0, temp66= 0, temp67= 0, temp68= 0, temp69 = 0;
+		float temp70= 0, temp71= 0, temp72= 0, temp73= 0, temp74= 0, temp75= 0, temp76= 0, temp77= 0, temp78= 0, temp79 = 0;
+		float temp80= 0, temp81= 0, temp82= 0, temp83= 0, temp84= 0, temp85= 0, temp86= 0, temp87= 0, temp88= 0, temp89 = 0;
+		float temp90= 0, temp91= 0, temp92= 0, temp93= 0, temp94= 0, temp95= 0, temp96= 0, temp97= 0, temp98= 0, temp99 = 0;
+
+		int N = F/T10; // N = 100/10=10; for F = 100 and T = 10
+		int effective_block_size = N*(N+1)/2;
+		//get the x and y coordinate
+		int tile_x = 0;
+		int tile_y = 0;
+		for ( int i = 0; i < N; i++ ) {
+			int end = ((2*N-i)*(i+1))/2;
+			if(threadIdx.x < end){
+				tile_x = i * T10;
+				tile_y = (N + threadIdx.x - end) * T10;
+				break;
+			}
+		}
+		int index = blockIdx.x*F*F;
+		//iteration: copy gmem-->smem; aggregate smem-->register
+		for (int iter = 0; iter < iterations; iter ++){
+			//phase 1 in iteration: gmem --> smem
+			//REQ: blockDim.x >= F/2
+			if(threadIdx.x < F/2){
+				for(int k = 0; k< SCAN_BATCH; k++){
+					if(iter*SCAN_BATCH + k < end - start){
+						float2 theta;
+						theta.x = __ldg(&thetaT[F * csrColIndex[start + iter*SCAN_BATCH + k] + 2*threadIdx.x]);
+						theta.y = __ldg(&thetaT[F * csrColIndex[start + iter*SCAN_BATCH + k] + 2*threadIdx.x+1]);
+						thetaTemp[k * F/2 + threadIdx.x] = theta;
+						//this simpler statement is slower.
+						//thetaTemp[k * F/2 + threadIdx.x] = __ldg((float2*)&thetaT[F * csrColIndex[start + iter*SCAN_BATCH + k] + 2*threadIdx.x]);
+					}
+					//not enough theta to copy, set zero
+					else
+						memset(&thetaTemp[k*F/2 + threadIdx.x], 0, 2*sizeof(float));
+				}
+			}
+			__syncthreads();
+			
+			//phase 2 in iteration: smem --> register
+			if(threadIdx.x < effective_block_size){//this redundant "if" seems improving kernel performance
+				for(int k = 0; k < SCAN_BATCH; k++){
+					temp0 += thetaTemp[tile_x/2 + k*F/2].x * thetaTemp[tile_y/2 + k*F/2].x;
+					temp1 += thetaTemp[tile_x/2 + k*F/2].x * thetaTemp[tile_y/2 + k*F/2].y;
+					temp2 += thetaTemp[tile_x/2 + k*F/2].x * thetaTemp[tile_y/2 +1 + k*F/2].x;
+					temp3 += thetaTemp[tile_x/2 + k*F/2].x * thetaTemp[tile_y/2 +1 + k*F/2].y;
+					temp4 += thetaTemp[tile_x/2 + k*F/2].x * thetaTemp[tile_y/2 +2 + k*F/2].x;
+					temp5 += thetaTemp[tile_x/2 + k*F/2].x * thetaTemp[tile_y/2 +2 + k*F/2].y;
+					temp6 += thetaTemp[tile_x/2 + k*F/2].x * thetaTemp[tile_y/2 +3 + k*F/2].x;
+					temp7 += thetaTemp[tile_x/2 + k*F/2].x * thetaTemp[tile_y/2 +3 + k*F/2].y;
+					temp8 += thetaTemp[tile_x/2 + k*F/2].x * thetaTemp[tile_y/2 +4 + k*F/2].x;
+					temp9 += thetaTemp[tile_x/2 + k*F/2].x * thetaTemp[tile_y/2 +4 + k*F/2].y;
+
+					temp10 += thetaTemp[tile_x/2 + k*F/2].y * thetaTemp[tile_y/2 + k*F/2].x;
+					temp11 += thetaTemp[tile_x/2 + k*F/2].y * thetaTemp[tile_y/2 + k*F/2].y;
+					temp12 += thetaTemp[tile_x/2 + k*F/2].y * thetaTemp[tile_y/2 +1 + k*F/2].x;
+					temp13 += thetaTemp[tile_x/2 + k*F/2].y * thetaTemp[tile_y/2 +1 + k*F/2].y;
+					temp14 += thetaTemp[tile_x/2 + k*F/2].y * thetaTemp[tile_y/2 +2 + k*F/2].x;
+					temp15 += thetaTemp[tile_x/2 + k*F/2].y * thetaTemp[tile_y/2 +2 + k*F/2].y;
+					temp16 += thetaTemp[tile_x/2 + k*F/2].y * thetaTemp[tile_y/2 +3 + k*F/2].x;
+					temp17 += thetaTemp[tile_x/2 + k*F/2].y * thetaTemp[tile_y/2 +3 + k*F/2].y;
+					temp18 += thetaTemp[tile_x/2 + k*F/2].y * thetaTemp[tile_y/2 +4 + k*F/2].x;
+					temp19 += thetaTemp[tile_x/2 + k*F/2].y * thetaTemp[tile_y/2 +4 + k*F/2].y;
+
+					temp20 += thetaTemp[tile_x/2 +1 + k*F/2].x * thetaTemp[tile_y/2 + k*F/2].x;
+					temp21 += thetaTemp[tile_x/2 +1 + k*F/2].x * thetaTemp[tile_y/2 + k*F/2].y;
+					temp22 += thetaTemp[tile_x/2 +1 + k*F/2].x * thetaTemp[tile_y/2 +1 + k*F/2].x;
+					temp23 += thetaTemp[tile_x/2 +1 + k*F/2].x * thetaTemp[tile_y/2 +1 + k*F/2].y;
+					temp24 += thetaTemp[tile_x/2 +1 + k*F/2].x * thetaTemp[tile_y/2 +2 + k*F/2].x;
+					temp25 += thetaTemp[tile_x/2 +1 + k*F/2].x * thetaTemp[tile_y/2 +2 + k*F/2].y;
+					temp26 += thetaTemp[tile_x/2 +1 + k*F/2].x * thetaTemp[tile_y/2 +3 + k*F/2].x;
+					temp27 += thetaTemp[tile_x/2 +1 + k*F/2].x * thetaTemp[tile_y/2 +3 + k*F/2].y;
+					temp28 += thetaTemp[tile_x/2 +1 + k*F/2].x * thetaTemp[tile_y/2 +4 + k*F/2].x;
+					temp29 += thetaTemp[tile_x/2 +1 + k*F/2].x * thetaTemp[tile_y/2 +4 + k*F/2].y;
+
+					temp30 += thetaTemp[tile_x/2 +1 + k*F/2].y * thetaTemp[tile_y/2 + k*F/2].x;
+					temp31 += thetaTemp[tile_x/2 +1 + k*F/2].y * thetaTemp[tile_y/2 + k*F/2].y;
+					temp32 += thetaTemp[tile_x/2 +1 + k*F/2].y * thetaTemp[tile_y/2 +1 + k*F/2].x;
+					temp33 += thetaTemp[tile_x/2 +1 + k*F/2].y * thetaTemp[tile_y/2 +1 + k*F/2].y;
+					temp34 += thetaTemp[tile_x/2 +1 + k*F/2].y * thetaTemp[tile_y/2 +2 + k*F/2].x;
+					temp35 += thetaTemp[tile_x/2 +1 + k*F/2].y * thetaTemp[tile_y/2 +2 + k*F/2].y;
+					temp36 += thetaTemp[tile_x/2 +1 + k*F/2].y * thetaTemp[tile_y/2 +3 + k*F/2].x;
+					temp37 += thetaTemp[tile_x/2 +1 + k*F/2].y * thetaTemp[tile_y/2 +3 + k*F/2].y;
+					temp38 += thetaTemp[tile_x/2 +1 + k*F/2].y * thetaTemp[tile_y/2 +4 + k*F/2].x;
+					temp39 += thetaTemp[tile_x/2 +1 + k*F/2].y * thetaTemp[tile_y/2 +4 + k*F/2].y;
+
+					temp40 += thetaTemp[tile_x/2 +2 + k*F/2].x * thetaTemp[tile_y/2 + k*F/2].x;
+					temp41 += thetaTemp[tile_x/2 +2 + k*F/2].x * thetaTemp[tile_y/2 + k*F/2].y;
+					temp42 += thetaTemp[tile_x/2 +2 + k*F/2].x * thetaTemp[tile_y/2 +1 + k*F/2].x;
+					temp43 += thetaTemp[tile_x/2 +2 + k*F/2].x * thetaTemp[tile_y/2 +1 + k*F/2].y;
+					temp44 += thetaTemp[tile_x/2 +2 + k*F/2].x * thetaTemp[tile_y/2 +2 + k*F/2].x;
+					temp45 += thetaTemp[tile_x/2 +2 + k*F/2].x * thetaTemp[tile_y/2 +2 + k*F/2].y;
+					temp46 += thetaTemp[tile_x/2 +2 + k*F/2].x * thetaTemp[tile_y/2 +3 + k*F/2].x;
+					temp47 += thetaTemp[tile_x/2 +2 + k*F/2].x * thetaTemp[tile_y/2 +3 + k*F/2].y;
+					temp48 += thetaTemp[tile_x/2 +2 + k*F/2].x * thetaTemp[tile_y/2 +4 + k*F/2].x;
+					temp49 += thetaTemp[tile_x/2 +2 + k*F/2].x * thetaTemp[tile_y/2 +4 + k*F/2].y;
+
+					temp50 += thetaTemp[tile_x/2 +2 + k*F/2].y * thetaTemp[tile_y/2 + k*F/2].x;
+					temp51 += thetaTemp[tile_x/2 +2 + k*F/2].y * thetaTemp[tile_y/2 + k*F/2].y;
+					temp52 += thetaTemp[tile_x/2 +2 + k*F/2].y * thetaTemp[tile_y/2 +1 + k*F/2].x;
+					temp53 += thetaTemp[tile_x/2 +2 + k*F/2].y * thetaTemp[tile_y/2 +1 + k*F/2].y;
+					temp54 += thetaTemp[tile_x/2 +2 + k*F/2].y * thetaTemp[tile_y/2 +2 + k*F/2].x;
+					temp55 += thetaTemp[tile_x/2 +2 + k*F/2].y * thetaTemp[tile_y/2 +2 + k*F/2].y;
+					temp56 += thetaTemp[tile_x/2 +2 + k*F/2].y * thetaTemp[tile_y/2 +3 + k*F/2].x;
+					temp57 += thetaTemp[tile_x/2 +2 + k*F/2].y * thetaTemp[tile_y/2 +3 + k*F/2].y;
+					temp58 += thetaTemp[tile_x/2 +2 + k*F/2].y * thetaTemp[tile_y/2 +4 + k*F/2].x;
+					temp59 += thetaTemp[tile_x/2 +2 + k*F/2].y * thetaTemp[tile_y/2 +4 + k*F/2].y;
+
+					temp60 += thetaTemp[tile_x/2 +3 + k*F/2].x * thetaTemp[tile_y/2 + k*F/2].x;
+					temp61 += thetaTemp[tile_x/2 +3 + k*F/2].x * thetaTemp[tile_y/2 + k*F/2].y;
+					temp62 += thetaTemp[tile_x/2 +3 + k*F/2].x * thetaTemp[tile_y/2 +1 + k*F/2].x;
+					temp63 += thetaTemp[tile_x/2 +3 + k*F/2].x * thetaTemp[tile_y/2 +1 + k*F/2].y;
+					temp64 += thetaTemp[tile_x/2 +3 + k*F/2].x * thetaTemp[tile_y/2 +2 + k*F/2].x;
+					temp65 += thetaTemp[tile_x/2 +3 + k*F/2].x * thetaTemp[tile_y/2 +2 + k*F/2].y;
+					temp66 += thetaTemp[tile_x/2 +3 + k*F/2].x * thetaTemp[tile_y/2 +3 + k*F/2].x;
+					temp67 += thetaTemp[tile_x/2 +3 + k*F/2].x * thetaTemp[tile_y/2 +3 + k*F/2].y;
+					temp68 += thetaTemp[tile_x/2 +3 + k*F/2].x * thetaTemp[tile_y/2 +4 + k*F/2].x;
+					temp69 += thetaTemp[tile_x/2 +3 + k*F/2].x * thetaTemp[tile_y/2 +4 + k*F/2].y;
+
+					temp70 += thetaTemp[tile_x/2 +3 + k*F/2].y * thetaTemp[tile_y/2 + k*F/2].x;
+					temp71 += thetaTemp[tile_x/2 +3 + k*F/2].y * thetaTemp[tile_y/2 + k*F/2].y;
+					temp72 += thetaTemp[tile_x/2 +3 + k*F/2].y * thetaTemp[tile_y/2 +1 + k*F/2].x;
+					temp73 += thetaTemp[tile_x/2 +3 + k*F/2].y * thetaTemp[tile_y/2 +1 + k*F/2].y;
+					temp74 += thetaTemp[tile_x/2 +3 + k*F/2].y * thetaTemp[tile_y/2 +2 + k*F/2].x;
+					temp75 += thetaTemp[tile_x/2 +3 + k*F/2].y * thetaTemp[tile_y/2 +2 + k*F/2].y;
+					temp76 += thetaTemp[tile_x/2 +3 + k*F/2].y * thetaTemp[tile_y/2 +3 + k*F/2].x;
+					temp77 += thetaTemp[tile_x/2 +3 + k*F/2].y * thetaTemp[tile_y/2 +3 + k*F/2].y;
+					temp78 += thetaTemp[tile_x/2 +3 + k*F/2].y * thetaTemp[tile_y/2 +4 + k*F/2].x;
+					temp79 += thetaTemp[tile_x/2 +3 + k*F/2].y * thetaTemp[tile_y/2 +4 + k*F/2].y;
+
+
+					temp80 += thetaTemp[tile_x/2 +4 + k*F/2].x * thetaTemp[tile_y/2 + k*F/2].x;
+					temp81 += thetaTemp[tile_x/2 +4 + k*F/2].x * thetaTemp[tile_y/2 + k*F/2].y;
+					temp82 += thetaTemp[tile_x/2 +4 + k*F/2].x * thetaTemp[tile_y/2 +1 + k*F/2].x;
+					temp83 += thetaTemp[tile_x/2 +4 + k*F/2].x * thetaTemp[tile_y/2 +1 + k*F/2].y;
+					temp84 += thetaTemp[tile_x/2 +4 + k*F/2].x * thetaTemp[tile_y/2 +2 + k*F/2].x;
+					temp85 += thetaTemp[tile_x/2 +4 + k*F/2].x * thetaTemp[tile_y/2 +2 + k*F/2].y;
+					temp86 += thetaTemp[tile_x/2 +4 + k*F/2].x * thetaTemp[tile_y/2 +3 + k*F/2].x;
+					temp87 += thetaTemp[tile_x/2 +4 + k*F/2].x * thetaTemp[tile_y/2 +3 + k*F/2].y;
+					temp88 += thetaTemp[tile_x/2 +4 + k*F/2].x * thetaTemp[tile_y/2 +4 + k*F/2].x;
+					temp89 += thetaTemp[tile_x/2 +4 + k*F/2].x * thetaTemp[tile_y/2 +4 + k*F/2].y;
+
+					temp90 += thetaTemp[tile_x/2 +4 + k*F/2].y * thetaTemp[tile_y/2 + k*F/2].x;
+					temp91 += thetaTemp[tile_x/2 +4 + k*F/2].y * thetaTemp[tile_y/2 + k*F/2].y;
+					temp92 += thetaTemp[tile_x/2 +4 + k*F/2].y * thetaTemp[tile_y/2 +1 + k*F/2].x;
+					temp93 += thetaTemp[tile_x/2 +4 + k*F/2].y * thetaTemp[tile_y/2 +1 + k*F/2].y;
+					temp94 += thetaTemp[tile_x/2 +4 + k*F/2].y * thetaTemp[tile_y/2 +2 + k*F/2].x;
+					temp95 += thetaTemp[tile_x/2 +4 + k*F/2].y * thetaTemp[tile_y/2 +2 + k*F/2].y;
+					temp96 += thetaTemp[tile_x/2 +4 + k*F/2].y * thetaTemp[tile_y/2 +3 + k*F/2].x;
+					temp97 += thetaTemp[tile_x/2 +4 + k*F/2].y * thetaTemp[tile_y/2 +3 + k*F/2].y;
+					temp98 += thetaTemp[tile_x/2 +4 + k*F/2].y * thetaTemp[tile_y/2 +4 + k*F/2].x;
+					temp99 += thetaTemp[tile_x/2 +4 + k*F/2].y * thetaTemp[tile_y/2 +4 + k*F/2].y;
+				}
+			}
+		}
+		//end of iteration in copying from smem and aggregating in register
+		__syncthreads();
+
+		//phase 3, after iteration: register --> gmem
+		if(threadIdx.x < effective_block_size){
+			tt[index + tile_x + tile_y*F] = temp0;
+			tt[index + tile_x + (tile_y + 1)*F] = temp1;
+			tt[index + tile_x + (tile_y + 2)*F] = temp2;
+			tt[index + tile_x + (tile_y + 3)*F] = temp3;
+			tt[index + tile_x + (tile_y + 4)*F] = temp4;
+			tt[index + tile_x + (tile_y + 5)*F] = temp5;
+			tt[index + tile_x + (tile_y + 6)*F] = temp6;
+			tt[index + tile_x + (tile_y + 7)*F] = temp7;
+			tt[index + tile_x + (tile_y + 8)*F] = temp8;
+			tt[index + tile_x + (tile_y + 9)*F] = temp9;
+
+			tt[index + tile_x + 1 + tile_y*F] = temp10;
+			tt[index + tile_x + 1 + (tile_y + 1)*F] = temp11;
+			tt[index + tile_x + 1 + (tile_y + 2)*F] = temp12;
+			tt[index + tile_x + 1 + (tile_y + 3)*F] = temp13;
+			tt[index + tile_x + 1 + (tile_y + 4)*F] = temp14;
+			tt[index + tile_x + 1 + (tile_y + 5)*F] = temp15;
+			tt[index + tile_x + 1 + (tile_y + 6)*F] = temp16;
+			tt[index + tile_x + 1 + (tile_y + 7)*F] = temp17;
+			tt[index + tile_x + 1 + (tile_y + 8)*F] = temp18;
+			tt[index + tile_x + 1 + (tile_y + 9)*F] = temp19;
+
+			tt[index + tile_x + 2 + tile_y*F] = temp20;
+			tt[index + tile_x + 2 + (tile_y + 1)*F] = temp21;
+			tt[index + tile_x + 2 + (tile_y + 2)*F] = temp22;
+			tt[index + tile_x + 2 + (tile_y + 3)*F] = temp23;
+			tt[index + tile_x + 2 + (tile_y + 4)*F] = temp24;
+			tt[index + tile_x + 2 + (tile_y + 5)*F] = temp25;
+			tt[index + tile_x + 2 + (tile_y + 6)*F] = temp26;
+			tt[index + tile_x + 2 + (tile_y + 7)*F] = temp27;
+			tt[index + tile_x + 2 + (tile_y + 8)*F] = temp28;
+			tt[index + tile_x + 2 + (tile_y + 9)*F] = temp29;
+
+			tt[index + tile_x + 3 + tile_y*F] = temp30;
+			tt[index + tile_x + 3 + (tile_y + 1)*F] = temp31;
+			tt[index + tile_x + 3 + (tile_y + 2)*F] = temp32;
+			tt[index + tile_x + 3 + (tile_y + 3)*F] = temp33;
+			tt[index + tile_x + 3 + (tile_y + 4)*F] = temp34;
+			tt[index + tile_x + 3 + (tile_y + 5)*F] = temp35;
+			tt[index + tile_x + 3 + (tile_y + 6)*F] = temp36;
+			tt[index + tile_x + 3 + (tile_y + 7)*F] = temp37;
+			tt[index + tile_x + 3 + (tile_y + 8)*F] = temp38;
+			tt[index + tile_x + 3 + (tile_y + 9)*F] = temp39;
+
+			tt[index + tile_x + 4 + tile_y*F] = temp0;
+			tt[index + tile_x + 4 + (tile_y + 1)*F] = temp41;
+			tt[index + tile_x + 4 + (tile_y + 2)*F] = temp42;
+			tt[index + tile_x + 4 + (tile_y + 3)*F] = temp43;
+			tt[index + tile_x + 4 + (tile_y + 4)*F] = temp44;
+			tt[index + tile_x + 4 + (tile_y + 5)*F] = temp45;
+			tt[index + tile_x + 4 + (tile_y + 6)*F] = temp46;
+			tt[index + tile_x + 4 + (tile_y + 7)*F] = temp47;
+			tt[index + tile_x + 4 + (tile_y + 8)*F] = temp48;
+			tt[index + tile_x + 4 + (tile_y + 9)*F] = temp49;
+
+			tt[index + tile_x + 5 + tile_y*F] = temp50;
+			tt[index + tile_x + 5 + (tile_y + 1)*F] = temp51;
+			tt[index + tile_x + 5 + (tile_y + 2)*F] = temp52;
+			tt[index + tile_x + 5 + (tile_y + 3)*F] = temp53;
+			tt[index + tile_x + 5 + (tile_y + 4)*F] = temp54;
+			tt[index + tile_x + 5 + (tile_y + 5)*F] = temp55;
+			tt[index + tile_x + 5 + (tile_y + 6)*F] = temp56;
+			tt[index + tile_x + 5 + (tile_y + 7)*F] = temp57;
+			tt[index + tile_x + 5 + (tile_y + 8)*F] = temp58;
+			tt[index + tile_x + 5 + (tile_y + 9)*F] = temp59;
+
+			tt[index + tile_x + 6 + tile_y*F] = temp60;
+			tt[index + tile_x + 6 + (tile_y + 1)*F] = temp61;
+			tt[index + tile_x + 6 + (tile_y + 2)*F] = temp62;
+			tt[index + tile_x + 6 + (tile_y + 3)*F] = temp63;
+			tt[index + tile_x + 6 + (tile_y + 4)*F] = temp64;
+			tt[index + tile_x + 6 + (tile_y + 5)*F] = temp65;
+			tt[index + tile_x + 6 + (tile_y + 6)*F] = temp66;
+			tt[index + tile_x + 6 + (tile_y + 7)*F] = temp67;
+			tt[index + tile_x + 6 + (tile_y + 8)*F] = temp68;
+			tt[index + tile_x + 6 + (tile_y + 9)*F] = temp69;
+
+			tt[index + tile_x + 7 + tile_y*F] = temp70;
+			tt[index + tile_x + 7 + (tile_y + 1)*F] = temp71;
+			tt[index + tile_x + 7 + (tile_y + 2)*F] = temp72;
+			tt[index + tile_x + 7 + (tile_y + 3)*F] = temp73;
+			tt[index + tile_x + 7 + (tile_y + 4)*F] = temp74;
+			tt[index + tile_x + 7 + (tile_y + 5)*F] = temp75;
+			tt[index + tile_x + 7 + (tile_y + 6)*F] = temp76;
+			tt[index + tile_x + 7 + (tile_y + 7)*F] = temp77;
+			tt[index + tile_x + 7 + (tile_y + 8)*F] = temp78;
+			tt[index + tile_x + 7 + (tile_y + 9)*F] = temp79;
+
+			tt[index + tile_x + 8 + tile_y*F] = temp80;
+			tt[index + tile_x + 8 + (tile_y + 1)*F] = temp81;
+			tt[index + tile_x + 8 + (tile_y + 2)*F] = temp82;
+			tt[index + tile_x + 8 + (tile_y + 3)*F] = temp83;
+			tt[index + tile_x + 8 + (tile_y + 4)*F] = temp84;
+			tt[index + tile_x + 8 + (tile_y + 5)*F] = temp85;
+			tt[index + tile_x + 8 + (tile_y + 6)*F] = temp86;
+			tt[index + tile_x + 8 + (tile_y + 7)*F] = temp87;
+			tt[index + tile_x + 8 + (tile_y + 8)*F] = temp88;
+			tt[index + tile_x + 8 + (tile_y + 9)*F] = temp89;
+
+			tt[index + tile_x + 9 + tile_y*F] = temp90;
+			tt[index + tile_x + 9 + (tile_y + 1)*F] = temp91;
+			tt[index + tile_x + 9 + (tile_y + 2)*F] = temp92;
+			tt[index + tile_x + 9 + (tile_y + 3)*F] = temp93;
+			tt[index + tile_x + 9 + (tile_y + 4)*F] = temp94;
+			tt[index + tile_x + 9 + (tile_y + 5)*F] = temp95;
+			tt[index + tile_x + 9 + (tile_y + 6)*F] = temp96;
+			tt[index + tile_x + 9 + (tile_y + 7)*F] = temp97;
+			tt[index + tile_x + 9 + (tile_y + 8)*F] = temp98;
+			tt[index + tile_x + 9 + (tile_y + 9)*F] = temp99;
+
+			//symmetric
+			if(tile_x != tile_y){
+				tt[index + tile_y + 0+ (tile_x + 0)*F]= temp0;
+				tt[index + tile_y + 1+ (tile_x + 0)*F]= temp1;
+				tt[index + tile_y + 2+ (tile_x + 0)*F]= temp2;
+				tt[index + tile_y + 3+ (tile_x + 0)*F]= temp3;
+				tt[index + tile_y + 4+ (tile_x + 0)*F]= temp4;
+				tt[index + tile_y + 5+ (tile_x + 0)*F]= temp5;
+				tt[index + tile_y + 6+ (tile_x + 0)*F]= temp6;
+				tt[index + tile_y + 7+ (tile_x + 0)*F]= temp7;
+				tt[index + tile_y + 8+ (tile_x + 0)*F]= temp8;
+				tt[index + tile_y + 9+ (tile_x + 0)*F]= temp9;
+
+				tt[index + tile_y + 0+ (tile_x + 1)*F]= temp10;
+				tt[index + tile_y + 1+ (tile_x + 1)*F]= temp11;
+				tt[index + tile_y + 2+ (tile_x + 1)*F]= temp12;
+				tt[index + tile_y + 3+ (tile_x + 1)*F]= temp13;
+				tt[index + tile_y + 4+ (tile_x + 1)*F]= temp14;
+				tt[index + tile_y + 5+ (tile_x + 1)*F]= temp15;
+				tt[index + tile_y + 6+ (tile_x + 1)*F]= temp16;
+				tt[index + tile_y + 7+ (tile_x + 1)*F]= temp17;
+				tt[index + tile_y + 8+ (tile_x + 1)*F]= temp18;
+				tt[index + tile_y + 9+ (tile_x + 1)*F]= temp19;
+
+				tt[index + tile_y + 0+ (tile_x + 2)*F]= temp20;
+				tt[index + tile_y + 1+ (tile_x + 2)*F]= temp21;
+				tt[index + tile_y + 2+ (tile_x + 2)*F]= temp22;
+				tt[index + tile_y + 3+ (tile_x + 2)*F]= temp23;
+				tt[index + tile_y + 4+ (tile_x + 2)*F]= temp24;
+				tt[index + tile_y + 5+ (tile_x + 2)*F]= temp25;
+				tt[index + tile_y + 6+ (tile_x + 2)*F]= temp26;
+				tt[index + tile_y + 7+ (tile_x + 2)*F]= temp27;
+				tt[index + tile_y + 8+ (tile_x + 2)*F]= temp28;
+				tt[index + tile_y + 9+ (tile_x + 2)*F]= temp29;
+
+				tt[index + tile_y + 0+ (tile_x + 3)*F]= temp30;
+				tt[index + tile_y + 1+ (tile_x + 3)*F]= temp31;
+				tt[index + tile_y + 2+ (tile_x + 3)*F]= temp32;
+				tt[index + tile_y + 3+ (tile_x + 3)*F]= temp33;
+				tt[index + tile_y + 4+ (tile_x + 3)*F]= temp34;
+				tt[index + tile_y + 5+ (tile_x + 3)*F]= temp35;
+				tt[index + tile_y + 6+ (tile_x + 3)*F]= temp36;
+				tt[index + tile_y + 7+ (tile_x + 3)*F]= temp37;
+				tt[index + tile_y + 8+ (tile_x + 3)*F]= temp38;
+				tt[index + tile_y + 9+ (tile_x + 3)*F]= temp39;
+
+				tt[index + tile_y + 0+ (tile_x + 4)*F]= temp40;
+				tt[index + tile_y + 1+ (tile_x + 4)*F]= temp41;
+				tt[index + tile_y + 2+ (tile_x + 4)*F]= temp42;
+				tt[index + tile_y + 3+ (tile_x + 4)*F]= temp43;
+				tt[index + tile_y + 4+ (tile_x + 4)*F]= temp44;
+				tt[index + tile_y + 5+ (tile_x + 4)*F]= temp45;
+				tt[index + tile_y + 6+ (tile_x + 4)*F]= temp46;
+				tt[index + tile_y + 7+ (tile_x + 4)*F]= temp47;
+				tt[index + tile_y + 8+ (tile_x + 4)*F]= temp48;
+				tt[index + tile_y + 9+ (tile_x + 4)*F]= temp49;
+
+				tt[index + tile_y + 0+ (tile_x + 5)*F]= temp50;
+				tt[index + tile_y + 1+ (tile_x + 5)*F]= temp51;
+				tt[index + tile_y + 2+ (tile_x + 5)*F]= temp52;
+				tt[index + tile_y + 3+ (tile_x + 5)*F]= temp53;
+				tt[index + tile_y + 4+ (tile_x + 5)*F]= temp54;
+				tt[index + tile_y + 5+ (tile_x + 5)*F]= temp55;
+				tt[index + tile_y + 6+ (tile_x + 5)*F]= temp56;
+				tt[index + tile_y + 7+ (tile_x + 5)*F]= temp57;
+				tt[index + tile_y + 8+ (tile_x + 5)*F]= temp58;
+				tt[index + tile_y + 9+ (tile_x + 5)*F]= temp59;
+
+				tt[index + tile_y + 0+ (tile_x + 6)*F]= temp60;
+				tt[index + tile_y + 1+ (tile_x + 6)*F]= temp61;
+				tt[index + tile_y + 2+ (tile_x + 6)*F]= temp62;
+				tt[index + tile_y + 3+ (tile_x + 6)*F]= temp63;
+				tt[index + tile_y + 4+ (tile_x + 6)*F]= temp64;
+				tt[index + tile_y + 5+ (tile_x + 6)*F]= temp65;
+				tt[index + tile_y + 6+ (tile_x + 6)*F]= temp66;
+				tt[index + tile_y + 7+ (tile_x + 6)*F]= temp67;
+				tt[index + tile_y + 8+ (tile_x + 6)*F]= temp68;
+				tt[index + tile_y + 9+ (tile_x + 6)*F]= temp69;
+
+				tt[index + tile_y + 0+ (tile_x + 7)*F]= temp70;
+				tt[index + tile_y + 1+ (tile_x + 7)*F]= temp71;
+				tt[index + tile_y + 2+ (tile_x + 7)*F]= temp72;
+				tt[index + tile_y + 3+ (tile_x + 7)*F]= temp73;
+				tt[index + tile_y + 4+ (tile_x + 7)*F]= temp74;
+				tt[index + tile_y + 5+ (tile_x + 7)*F]= temp75;
+				tt[index + tile_y + 6+ (tile_x + 7)*F]= temp76;
+				tt[index + tile_y + 7+ (tile_x + 7)*F]= temp77;
+				tt[index + tile_y + 8+ (tile_x + 7)*F]= temp78;
+				tt[index + tile_y + 9+ (tile_x + 7)*F]= temp79;
+
+				tt[index + tile_y + 0+ (tile_x + 8)*F]= temp80;
+				tt[index + tile_y + 1+ (tile_x + 8)*F]= temp81;
+				tt[index + tile_y + 2+ (tile_x + 8)*F]= temp82;
+				tt[index + tile_y + 3+ (tile_x + 8)*F]= temp83;
+				tt[index + tile_y + 4+ (tile_x + 8)*F]= temp84;
+				tt[index + tile_y + 5+ (tile_x + 8)*F]= temp85;
+				tt[index + tile_y + 6+ (tile_x + 8)*F]= temp86;
+				tt[index + tile_y + 7+ (tile_x + 8)*F]= temp87;
+				tt[index + tile_y + 8+ (tile_x + 8)*F]= temp88;
+				tt[index + tile_y + 9+ (tile_x + 8)*F]= temp89;
+
+				tt[index + tile_y + 0+ (tile_x + 9)*F]= temp90;
+				tt[index + tile_y + 1+ (tile_x + 9)*F]= temp91;
+				tt[index + tile_y + 2+ (tile_x + 9)*F]= temp92;
+				tt[index + tile_y + 3+ (tile_x + 9)*F]= temp93;
+				tt[index + tile_y + 4+ (tile_x + 9)*F]= temp94;
+				tt[index + tile_y + 5+ (tile_x + 9)*F]= temp95;
+				tt[index + tile_y + 6+ (tile_x + 9)*F]= temp96;
+				tt[index + tile_y + 7+ (tile_x + 9)*F]= temp97;
+				tt[index + tile_y + 8+ (tile_x + 9)*F]= temp98;
+				tt[index + tile_y + 9+ (tile_x + 9)*F]= temp99;
+			}
+			//regularization
+			if(tile_x == tile_y){
+				for(int k = 0; k < T10; k++)
+					tt[index + (tile_x+k)*(1+F)] += (end - start) * lambda;
+			}
+		}
+	}
+}
+
+void doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const float* csrValHostPtr,
+		const int* cscRowIndexHostPtr, const int* cscColIndexHostPtr, const float* cscValHostPtr,
+		const int* cooRowIndexHostPtr, float* thetaTHost, float* XTHost,
+		const int * cooRowIndexTestHostPtr, const int * cooColIndexTestHostPtr, const float * cooValHostTestPtr,
+		const int m, const int n, const int f, const long nnz, const long nnz_test, const float lambda,
+		const int ITERS, const int X_BATCH, const int THETA_BATCH)
+{
+	//device pointers
+	int * csrRowIndex = 0;
+	int * csrColIndex = 0;
+	float * csrVal = 0;
+	float * thetaT = 0;
+	float * tt = 0;
+	float * XT = 0;
+	float * cscVal =0;
+	int * cscRowIndex = 0;
+	int * cscColIndex = 0;
+	//coo to calculate RMSE
+	int * cooRowIndex =0;
+	float * cooVal_test;
+	int * cooRowIndex_test;
+	int * cooColIndex_test;
+	printf("*******start allocating memory on GPU...\n");
+	cudacall(cudaMalloc((void** ) &cscRowIndex,nnz * sizeof(cscRowIndex[0])));
+	cudacall(cudaMalloc((void** ) &cscColIndex, (n+1) * sizeof(cscColIndex[0])));
+	cudacall(cudaMalloc((void** ) &cscVal, nnz * sizeof(cscVal[0])));
+	//dimension: F*N
+	cudacall(cudaMalloc((void** ) &thetaT, f * n * sizeof(thetaT[0])));
+	//dimension: M*F
+	cudacall(cudaMalloc((void** ) &XT, f * m * sizeof(XT[0])));
+
+	printf("*******start copying memory to GPU...\n");
+
+	cudacall(cudaMemcpy(cscRowIndex, cscRowIndexHostPtr,(size_t ) nnz * sizeof(cscRowIndex[0]), cudaMemcpyHostToDevice));
+	cudacall(cudaMemcpy(cscColIndex, cscColIndexHostPtr,(size_t ) (n+1) * sizeof(cscColIndex[0]), cudaMemcpyHostToDevice));
+	cudacall(cudaMemcpy(cscVal, cscValHostPtr,(size_t ) (nnz * sizeof(cscVal[0])),cudaMemcpyHostToDevice));
+	cudacall(cudaMemcpy(thetaT, thetaTHost, (size_t ) (n * f * sizeof(thetaT[0])), cudaMemcpyHostToDevice));
+
+	cudacall(cudaDeviceSetCacheConfig(cudaFuncCachePreferShared));
+	//64-bit smem access
+	//http://acceleware.com/blog/maximizing-shared-memory-bandwidth-nvidia-kepler-gpus
+	cudaDeviceSetSharedMemConfig(cudaSharedMemBankSizeEightByte);
+
+	//initialize cublas, cusparse
+	cublasHandle_t handle;
+	cublascall(cublasCreate(&handle));
+	cusparseHandle_t cushandle = 0;
+	cusparsecall(cusparseCreate(&cushandle));
+	cusparseMatDescr_t descr;
+	cusparsecall( cusparseCreateMatDescr(&descr));
+	cusparseSetMatType(descr, CUSPARSE_MATRIX_TYPE_GENERAL);
+	cusparseSetMatIndexBase(descr, CUSPARSE_INDEX_BASE_ZERO);
+	using namespace std;
+	//variable used to time
+	double elapsed = 0.0;
+	struct timeval tv;
+	struct timeval start_tv;
+	struct timeval start_tv2;
+
+	for(int iter = 0; iter < ITERS ; iter ++){
+		printf("---------------------------ALS iteration %d, update X.----------------------------------\n", iter);
+		gettimeofday(&start_tv, NULL);
+		//copy csr matrix in
+		cudacall(cudaMalloc((void** ) &csrRowIndex,(m + 1) * sizeof(csrRowIndex[0])));
+		cudacall(cudaMalloc((void** ) &csrColIndex, nnz * sizeof(csrColIndex[0])));
+		cudacall(cudaMalloc((void** ) &csrVal, nnz * sizeof(csrVal[0])));
+		cudacall(cudaMemcpy(csrRowIndex, csrRowIndexHostPtr,(size_t ) ((m + 1) * sizeof(csrRowIndex[0])), cudaMemcpyHostToDevice));
+		cudacall(cudaMemcpy(csrColIndex, csrColIndexHostPtr,(size_t ) (nnz * sizeof(csrColIndex[0])), cudaMemcpyHostToDevice));
+		cudacall(cudaMemcpy(csrVal, csrValHostPtr,(size_t ) (nnz * sizeof(csrVal[0])),cudaMemcpyHostToDevice));
+
+		printf("\tgenerate: Y*theta using cusparse.\n");
+		float * ytheta = 0;
+		float * ythetaT = 0;
+		cudacall(cudaMalloc((void** ) &ytheta, f * m * sizeof(ytheta[0])));
+		cudacall(cudaMalloc((void** ) &ythetaT, f * m * sizeof(ythetaT[0])));
+
+		const float alpha = 1.0f;
+		const float beta = 0.0f;
+		cusparsecall (cusparseScsrmm2(cushandle, CUSPARSE_OPERATION_NON_TRANSPOSE,
+				CUSPARSE_OPERATION_TRANSPOSE, m, f, n, nnz, &alpha, descr, csrVal,
+				csrRowIndex, csrColIndex, thetaT, f, &beta, ytheta, m) );
+		//cudaDeviceSynchronize();
+		//printf("*******transpose ytheta use cublas.\n");
+		//ytheta: m*f; need ythetaT = (ytheta).T = f*m
+		cublascall(cublasSgeam(handle, CUBLAS_OP_T, CUBLAS_OP_N, f, m, &alpha,
+				(const float * ) ytheta, m, &beta, ythetaT, f, ythetaT, f));
+		cudaDeviceSynchronize();
+		cudaCheckError();
+		cudacall(cudaFree(ytheta));
+		cudacall(cudaFree(csrVal));
+		gettimeofday(&tv, NULL);
+		elapsed = (tv.tv_sec - start_tv.tv_sec)
+				+ (tv.tv_usec - start_tv.tv_usec) / 1000000.0;
+		printf("\tgenerate: Y*theta run %f seconds.\n", elapsed);
+
+		int block_dim = f/T10*(f/T10+1)/2;
+		if (block_dim < f/2) block_dim = f/2;
+		for(int batch_id = 0; batch_id< X_BATCH; batch_id ++){
+			printf("*******batch %d / %d.*******\n", batch_id, X_BATCH);
+			int batch_size = 0;
+			if(batch_id != X_BATCH - 1)
+				batch_size = m/X_BATCH;
+			else
+				batch_size = m - batch_id*(m/X_BATCH);
+			int batch_offset = batch_id * (m/X_BATCH);
+			cudacall(cudaMalloc((void** ) &tt, f * f * batch_size * sizeof(float)));
+			gettimeofday(&start_tv2, NULL);
+			printf("\tupdateXByBlock kernel.\n");
+			if(f == 100){
+				//get_hermitianT10<<<batch_size, f/T10*(f/T10+1)/2, SCAN_BATCH * f/2*sizeof(float2)>>>
+				#ifdef CUMF_USE_HALF
+				half* thetaT_fp16 = 0;
+				cudacall(cudaMalloc((void** ) &thetaT_fp16, f * n * sizeof(thetaT_fp16[0])));
+				fp32Array2fp16Array<<<(n*f-1)/1024 + 1, 1024>>>(thetaT, thetaT_fp16, f*n);
+				get_hermitian100WithHalf<<<batch_size, 64, SCAN_BATCH * f/2*sizeof(float2)>>>
+					(batch_offset, tt, csrRowIndex, csrColIndex, lambda, m, f, thetaT_fp16);
+				cudacall(cudaFree(thetaT_fp16));
+				#else
+				get_hermitian100<<<batch_size, 64, SCAN_BATCH * f/2*sizeof(float2)>>>
+					(batch_offset, tt, csrRowIndex, csrColIndex, lambda, m, f, thetaT);
+				#endif
+			}
+			else
+				get_hermitianT10<<<batch_size, block_dim, SCAN_BATCH * f/2*sizeof(float2)>>>
+				//get_hermitianT8<<<batch_size, f/T8*(f/T8+1)/2, SCAN_BATCH * f/2*sizeof(float2)>>>
+					(batch_offset, tt, csrRowIndex, csrColIndex, lambda, m, f, thetaT);
+			cudaDeviceSynchronize();
+			cudaCheckError();
+			gettimeofday(&tv, NULL);
+			elapsed = (tv.tv_sec - start_tv2.tv_sec)
+					+ (tv.tv_usec - start_tv2.tv_usec) / 1000000.0;
+			printf("\tupdate X kernel run %f seconds, gridSize: %d, blockSize %d.\n", elapsed, batch_size, f);
+
+			//host pointers for cublas batch operations
+			double t0 = seconds();
+			float ** devPtrTTHost = 0;
+			cudacall(cudaMallocHost( (void** ) &devPtrTTHost, batch_size * sizeof(*devPtrTTHost) ) );
+			float **devPtrYthetaTHost = 0;
+			cudacall(cudaMallocHost( (void** ) &devPtrYthetaTHost, batch_size * sizeof(*devPtrYthetaTHost) ) );
+
+			printf("\tinvoke updateX with batch_size: %d, batch_offset: %d..\n", batch_size, batch_offset);
+			updateX(batch_size, batch_offset, ythetaT, tt, XT, handle, m, n, f, nnz,
+					devPtrTTHost, devPtrYthetaTHost);
+
+			printf("\tupdateX run seconds: %f \n", seconds() - t0);
+			cudacall(cudaFree(tt));
+			cudacall(cudaFreeHost(devPtrTTHost));
+			cudacall(cudaFreeHost(devPtrYthetaTHost));
+		}
+		gettimeofday(&tv, NULL);
+		elapsed = (tv.tv_sec - start_tv.tv_sec)
+				+ (tv.tv_usec - start_tv.tv_usec) / 1000000.0;
+		printf("update X run %f seconds, gridSize: %d, blockSize %d.\n", elapsed, m, f);
+		cudacall(cudaFree(csrRowIndex));
+		cudacall(cudaFree(csrColIndex));
+		cudacall(cudaFree(ythetaT));
+
+		gettimeofday(&start_tv, NULL);
+		printf("---------------------------------- ALS iteration %d, update theta ----------------------------------\n", iter);
+		printf("\tgenerate: Y'*X using cusparse.\n");
+		float * yTX = 0;
+		float * yTXT = 0;
+		cudacall(cudaMalloc((void** ) &yTXT, f * n * sizeof(yTXT[0])));
+		cudacall(cudaMalloc((void** ) &yTX, n * f * sizeof(yTX[0])));
+		cusparsecall( cusparseScsrmm2(cushandle, CUSPARSE_OPERATION_NON_TRANSPOSE,
+				CUSPARSE_OPERATION_TRANSPOSE, n, f, m, nnz, &alpha, descr, cscVal,
+				cscColIndex, cscRowIndex, XT, f, &beta, yTX, n) );
+		//cudaDeviceSynchronize();
+		//printf("*******transpose yTX \n");
+		//yTX: n*f; need yTXT = (yTX).T = f*n
+		cublascall(cublasSgeam(handle, CUBLAS_OP_T, CUBLAS_OP_N, f, n, &alpha,
+				(const float * ) yTX, n, &beta, yTXT, f, yTXT, f));
+		cudaDeviceSynchronize();
+		cudacall(cudaFree(yTX));
+		gettimeofday(&tv, NULL);
+		elapsed = (tv.tv_sec - start_tv.tv_sec)
+				+ (tv.tv_usec - start_tv.tv_usec) / 1000000.0;
+		printf("\tgenerate: Y'*X run %f seconds.\n", elapsed);
+		//in batches, when N is huge
+		for(int batch_id = 0; batch_id< THETA_BATCH; batch_id ++){
+			printf("*******batch %d / %d.*******\n", batch_id, THETA_BATCH);
+			int batch_size = 0;
+			if(batch_id != THETA_BATCH - 1)
+				batch_size = n/THETA_BATCH;
+			else
+				batch_size = n - batch_id*(n/THETA_BATCH);
+			int batch_offset = batch_id * (n/THETA_BATCH);
+
+			float * xx = 0;
+			cudacall(cudaMalloc((void** ) &xx, f * f * batch_size * sizeof(xx[0])));
+			cudacall( cudaMemset(xx, 0, f*f*batch_size*sizeof(float)) );
+
+			gettimeofday(&start_tv2, NULL);
+			printf("\tupdateThetaByBlock kernel.\n");
+			//get_hermitian_theta<<<batch_size, 64>>>(batch_offset, xx, cscRowIndex, cscColIndex, lambda, n);
+			//updateThetaByBlock2pRegDsmemTile<<<batch_size, F>>>
+			if(f == 100){
+				//get_hermitianT10<<<batch_size, f/T10*(f/T10+1)/2, SCAN_BATCH * f/2*sizeof(float2)>>>
+				#ifdef CUMF_USE_HALF
+				half * XT_fp16 = 0;
+				cudacall(cudaMalloc((void** ) &XT_fp16, f * m * sizeof(XT_fp16[0])));
+				fp32Array2fp16Array<<<(n*f-1)/1024 + 1, 1024>>>(XT, XT_fp16, f*m);
+				get_hermitian100WithHalf<<<batch_size, 64, SCAN_BATCH * f/2*sizeof(float2)>>>
+					(batch_offset, xx, cscColIndex, cscRowIndex, lambda, n, f, XT_fp16);
+				cudacall(cudaFree(XT_fp16));
+				#else
+				get_hermitian100<<<batch_size, 64, SCAN_BATCH * f/2*sizeof(float2)>>>
+					(batch_offset, xx, cscColIndex, cscRowIndex, lambda, n, f, XT);
+				#endif
+			}
+			else
+				get_hermitianT10<<<batch_size, block_dim, SCAN_BATCH*f*sizeof(float)>>>
+					(batch_offset, xx, cscColIndex, cscRowIndex, lambda, n, f, XT);
+			cudaDeviceSynchronize();
+			cudaCheckError();
+
+			gettimeofday(&tv, NULL);
+			elapsed = (tv.tv_sec - start_tv2.tv_sec)
+					+ (tv.tv_usec - start_tv2.tv_usec) / 1000000.0;
+			printf("\tupdate Theta kernel run %f seconds, gridSize: %d, blockSize %d.\n",
+					elapsed, batch_size, f);
+
+			double t0 = seconds();
+			float ** devPtrXXHost = 0;
+			cudacall(cudaMallocHost( (void** ) &devPtrXXHost, batch_size * sizeof(*devPtrXXHost) ) );
+			float **devPtrYTXTHost = 0;
+			cudacall(cudaMallocHost( (void** ) &devPtrYTXTHost, batch_size * sizeof(*devPtrYTXTHost) ) );
+			printf("*******invoke updateTheta with batch_size: %d, batch_offset: %d.\n", batch_size, batch_offset);
+			updateTheta(batch_size, batch_offset, xx, yTXT, thetaT, handle, m,  n,  f,  nnz,
+					devPtrXXHost, devPtrYTXTHost);
+			printf("\tupdateTheta run seconds: %f \n", seconds() - t0);
+			cudacall(cudaFree(xx));
+			cudacall(cudaFreeHost(devPtrXXHost));
+			cudacall(cudaFreeHost(devPtrYTXTHost));
+		}
+		cudacall(cudaFree(yTXT));
+		gettimeofday(&tv, NULL);
+		elapsed = (tv.tv_sec - start_tv.tv_sec)
+				+ (tv.tv_usec - start_tv.tv_usec) / 1000000.0;
+		printf("update theta run %f seconds, gridSize: %d, blockSize %d.\n",
+				elapsed, n, f);
+		printf("Calculate RMSE.\n");
+		float * errors_train = 0;
+		int error_size = 1000;
+		cudacall(cudaMalloc((void** ) &errors_train, error_size * sizeof(errors_train[0])));
+		cudacall( cudaMemset(errors_train, 0, error_size*sizeof(float)) );
+
+		cudacall(cudaMalloc((void** ) &cooRowIndex, nnz * sizeof(cooRowIndex[0])));
+		cudacall(cudaMemcpy(cooRowIndex, cooRowIndexHostPtr,(size_t ) (nnz * sizeof(cooRowIndex[0])), cudaMemcpyHostToDevice));
+		cudacall(cudaMalloc((void** ) &csrColIndex, nnz * sizeof(csrColIndex[0])));
+		cudacall(cudaMalloc((void** ) &csrVal, nnz * sizeof(csrVal[0])));
+		cudacall(cudaMemcpy(csrColIndex, csrColIndexHostPtr,(size_t ) (nnz * sizeof(csrColIndex[0])), cudaMemcpyHostToDevice));
+		cudacall(cudaMemcpy(csrVal, csrValHostPtr,(size_t ) (nnz * sizeof(csrVal[0])),cudaMemcpyHostToDevice));
+
+		RMSE<<<(nnz-1)/256 + 1, 256>>>
+				(csrVal, cooRowIndex, csrColIndex, thetaT, XT, errors_train, nnz, error_size, f);
+		cudaDeviceSynchronize();
+		cudaCheckError();
+		cudacall(cudaFree(cooRowIndex));
+		cudacall(cudaFree(csrColIndex));
+		cudacall(cudaFree(csrVal));
+
+		float* rmse_train = (float*) malloc (sizeof(float));
+		cublascall( cublasSasum(handle, error_size, errors_train, 1, rmse_train) );
+
+		cudaDeviceSynchronize();
+		printf("@@@@@@@@@@@@@@@@@@@ Train RMSE in iter %d: %f\n", iter, sqrt((*rmse_train)/nnz));
+		cudacall(cudaFree(errors_train));
+
+		
+		float * errors_test = 0;
+		cudacall(cudaMalloc((void** ) &errors_test, error_size * sizeof(errors_test[0])));
+		cudacall( cudaMemset(errors_test, 0, error_size*sizeof(float)) );
+
+		cudacall(cudaMalloc((void** ) &cooRowIndex_test, nnz_test * sizeof(cooRowIndex_test[0])));
+		cudacall(cudaMemcpy(cooRowIndex_test, cooRowIndexTestHostPtr,(size_t ) (nnz_test * sizeof(cooRowIndex_test[0])), cudaMemcpyHostToDevice));
+		cudacall(cudaMalloc((void** ) &cooColIndex_test, nnz_test * sizeof(cooColIndex_test[0])));
+		cudacall(cudaMalloc((void** ) &cooVal_test, nnz_test * sizeof(cooVal_test[0])));
+		cudacall(cudaMemcpy(cooColIndex_test, cooColIndexTestHostPtr,(size_t ) (nnz_test * sizeof(cooColIndex_test[0])), cudaMemcpyHostToDevice));
+		cudacall(cudaMemcpy(cooVal_test, cooValHostTestPtr,(size_t ) (nnz_test * sizeof(cooVal_test[0])),cudaMemcpyHostToDevice));
+
+		RMSE<<<(nnz_test-1)/256, 256>>>(cooVal_test, cooRowIndex_test, cooColIndex_test, thetaT, XT,
+				errors_test, nnz_test, error_size, f);
+		cudaDeviceSynchronize();
+		cudaCheckError();
+
+		cudacall(cudaFree(cooRowIndex_test));
+		cudacall(cudaFree(cooColIndex_test));
+		cudacall(cudaFree(cooVal_test));
+
+		float* rmse_test = (float*) malloc (sizeof(float));
+		cublascall( cublasSasum(handle, error_size, errors_test, 1, rmse_test) );
+		cudaDeviceSynchronize();
+		printf("@@@@@@@@@@@@@@@@@@@ Test RMSE in iter %d: %f\n", iter, sqrt((*rmse_test)/nnz_test));
+		cudacall(cudaFree(errors_test));
+		
+	}
+	//copy feature vectors back to host
+	cudacall(cudaMemcpy(thetaTHost, thetaT, (size_t ) (n * f * sizeof(thetaT[0])), cudaMemcpyDeviceToHost));
+	cudacall(cudaMemcpy(XTHost, XT, (size_t ) (m * f * sizeof(XT[0])), cudaMemcpyDeviceToHost));
+	cudacall(cudaFree(thetaT));
+	cudacall(cudaFree(XT));
+	cudacall(cudaFree(cscVal));
+	cudacall(cudaFree(cscColIndex));
+	cudacall(cudaFree(cscRowIndex));
+	cudacall(cudaDeviceReset());
+}

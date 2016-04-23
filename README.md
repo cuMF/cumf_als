@@ -4,7 +4,7 @@
 
 Matrix factorization (MF) factors a sparse rating matrix R (m by n, with N_z non-zero elements) into a m-by-f and a f-by-n matrices, as shown below.
 
-<img src=https://github.com/wei-tan/CuMF/raw/master/als/images/mf.png width=444 height=223 />
+<img src=https://github.com/wei-tan/CuMF/raw/master/images/mf.png width=444 height=223 />
  
 Matrix factorization (MF) is at the core of many popular algorithms, e.g., [collaborative filtering](https://en.wikipedia.org/wiki/Collaborative_filtering), word embedding, and topic model. GPU (graphics processing units) with massive cores and high intra-chip memory bandwidth sheds light on accelerating MF much further when appropriately exploiting its architectural characteristics.
 

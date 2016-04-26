@@ -1,5 +1,5 @@
 /*
- * test-als.cu
+ * als_main.cu
  *
  *  Created on: Feb 10, 2015
  *      Author: Wei Tan (wtan@us.ibm.com)
@@ -8,6 +8,9 @@
  *  Code optimized for F = 100, and on cc 3.5, 3.7 platforms. Also tested in cc 5.2
  */
 #include "als.h"
+#include "host_utilities.h"
+#include <fstream>
+
 #define DEVICEID 0
 #define ITERS 10
 

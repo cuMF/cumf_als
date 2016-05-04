@@ -256,16 +256,34 @@ int updateThetaMagma(const int batch_size, const int batch_offset, float * xx,
 
 __global__ void RMSE(const float * csrVal, const int* cooRowIndex,
 		const int* csrColIndex, const float * __restrict__ thetaT, const float * __restrict__ XT, float * error, const int nnz,
-		const int error_size, const int f) {
+		const int error_size, const int f, const float avg_rating) {
 	int i = blockDim.x*blockIdx.x + threadIdx.x;
 	if (i < nnz) {
 		int row = cooRowIndex[i];
 		int col = csrColIndex[i];
-		float e = csrVal[i];
+		float e = csrVal[i] - avg_rating;
 		//if(i%1000000==0) printf("row: %d, col: %d, csrVal[%d]: %f.\t", row, col, i, e);
 		for (int k = 0; k < f; k++) {
 			e -= __ldg(&thetaT[f * col + k]) * __ldg(&XT[f * row + k]);
 		}
+		atomicAdd(&error[i%error_size], e*e);
+		//error[i] = e*e;
+		//if(i%1000000==0) printf("error[%d]: %f.\n", i, e);
+	}
+}
+__global__ void RMSE(const float * csrVal, const int* cooRowIndex,
+		const int* csrColIndex, const float * __restrict__ thetaT, const float * __restrict__ XT, float * error, const int nnz,
+		const int error_size, const int f, const float avg_rating, const float * user_bias, const float * item_bias) {
+	int i = blockDim.x*blockIdx.x + threadIdx.x;
+	if (i < nnz) {
+		int row = cooRowIndex[i];
+		int col = csrColIndex[i];
+		float e = csrVal[i] - avg_rating;
+		//if(i%1000000==0) printf("row: %d, col: %d, csrVal[%d]: %f.\t", row, col, i, e);
+		for (int k = 0; k < f; k++) {
+			e -= __ldg(&thetaT[f * col + k]) * __ldg(&XT[f * row + k]);
+		}
+		e -= user_bias[row] + item_bias[col];
 		atomicAdd(&error[i%error_size], e*e);
 		//error[i] = e*e;
 		//if(i%1000000==0) printf("error[%d]: %f.\n", i, e);
@@ -623,12 +641,79 @@ get_hermitianT10(const int batch_offset, float* tt,
 	}
 }
 
+__global__ void
+normalize_csr_ratings(float* csrVal, const int* csrRowIndex, const int* csrColIndex, 
+	const float* user_bias, const float* item_bias, const float avg_rating,
+	const int m){
+	//block per user row
+	if (blockIdx.x < m) {		
+		int start = csrRowIndex[blockIdx.x];
+		int end = csrRowIndex[blockIdx.x + 1];
+		for(int index = threadIdx.x; index < end - start; index += blockDim.x){
+			csrVal[start + index] -=
+				user_bias[blockIdx.x] + item_bias[csrColIndex[start + index]] + avg_rating;
+		}
+	}
+}
+
+__global__ void
+normalize_csc_ratings(float* cscVal, const int* cscRowIndex, const int* cscColIndex, 
+	const float* user_bias, const float* item_bias, const float avg_rating,
+	const int n){
+	//block per item col
+	if (blockIdx.x < n) {		
+		int start = cscColIndex[blockIdx.x];
+		int end = cscColIndex[blockIdx.x + 1];
+		for(int index = threadIdx.x; index < end - start; index += blockDim.x){
+			cscVal[start + index] -=
+				item_bias[blockIdx.x] + user_bias[cscRowIndex[start + index]] + avg_rating;
+		}
+	}
+}
+
+
+__global__ void
+normalize_csr_errors(float* csrVal, const int* csrRowIndex, const int* csrColIndex, 
+	const float* user_bias, const float* item_bias, const float avg_rating,
+	const int m, const int F, const float* thetaT, const float * xT, const float lambda){
+	//block per user row
+	if (blockIdx.x < m) {		
+		int start = csrRowIndex[blockIdx.x];
+		int end = csrRowIndex[blockIdx.x + 1];
+		for(int index = threadIdx.x; index < end - start; index += blockDim.x){
+			float temp = item_bias[csrColIndex[start + index]] + avg_rating;
+			for(int k = 0; k < F; k++)
+				temp += thetaT[ F * csrColIndex[start + index] + k] * xT[F * blockIdx.x + k];
+			csrVal[start + index] = (csrVal[start + index] - temp)/(1 + lambda)/(end - start); 
+		}
+	}
+}
+
+__global__ void
+normalize_csc_errors(float* cscVal, const int* cscRowIndex, const int* cscColIndex, 
+	const float* user_bias, const float* item_bias, const float avg_rating,
+	const int n, const int F, const float* thetaT, const float * xT, const float lambda){
+	//block per user row
+	if (blockIdx.x < n) {		
+		int start = cscColIndex[blockIdx.x];
+		int end = cscColIndex[blockIdx.x + 1];
+		for(int index = threadIdx.x; index < end - start; index += blockDim.x){
+			float temp = user_bias[cscRowIndex[start + index]] + avg_rating;
+			for(int k = 0; k < F; k++)
+				temp += thetaT[ F * blockIdx.x + k] * xT[F * cscRowIndex[start + index] + k];
+			//cscVal[start + index] -= temp; 
+			cscVal[start + index] = (cscVal[start + index] - temp)/(1 + lambda)/(end - start); 
+		}
+	}
+}
+
+
 void doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const float* csrValHostPtr,
 		const int* cscRowIndexHostPtr, const int* cscColIndexHostPtr, const float* cscValHostPtr,
 		const int* cooRowIndexHostPtr, float* thetaTHost, float* XTHost,
 		const int * cooRowIndexTestHostPtr, const int * cooColIndexTestHostPtr, const float * cooValHostTestPtr,
 		const int m, const int n, const int f, const long nnz, const long nnz_test, const float lambda,
-		const int ITERS, const int X_BATCH, const int THETA_BATCH)
+		const int ITERS, const int X_BATCH, const int THETA_BATCH, const float avg_rating)
 {
 	//device pointers
 	int * csrRowIndex = 0;
@@ -645,6 +730,26 @@ void doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const f
 	float * cooVal_test;
 	int * cooRowIndex_test;
 	int * cooColIndex_test;
+	//bias terms
+	float * user_bias;
+	float * item_bias;
+	
+	float* ones_m_host;
+	float* ones_n_host;
+	cudacall(cudaMallocHost( (void** ) &ones_m_host, m * sizeof(ones_m_host[0])) );
+	cudacall(cudaMallocHost( (void** ) &ones_n_host, n * sizeof(ones_n_host[0])) );
+	float* ones_m;
+	float* ones_n;
+	cudacall(cudaMalloc( (void** ) &ones_m, m * sizeof(ones_m[0])) );
+	cudacall(cudaMalloc( (void** ) &ones_n, n * sizeof(ones_n[0])) );
+
+	for (int k = 0; k < n; k++)
+		ones_n_host[k] = 1.0f;
+	for (int k = 0; k < m; k++)
+		ones_m_host[k] = 1.0f;
+	cudacall(cudaMemcpy(ones_m, ones_m_host,(size_t ) m * sizeof(ones_m[0]), cudaMemcpyHostToDevice));
+	cudacall(cudaMemcpy(ones_n, ones_n_host,(size_t ) n * sizeof(ones_n[0]), cudaMemcpyHostToDevice));
+
 	printf("*******start allocating memory on GPU...\n");
 	cudacall(cudaMalloc((void** ) &cscRowIndex,nnz * sizeof(cscRowIndex[0])));
 	cudacall(cudaMalloc((void** ) &cscColIndex, (n+1) * sizeof(cscColIndex[0])));
@@ -653,6 +758,11 @@ void doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const f
 	cudacall(cudaMalloc((void** ) &thetaT, f * n * sizeof(thetaT[0])));
 	//dimension: M*F
 	cudacall(cudaMalloc((void** ) &XT, f * m * sizeof(XT[0])));
+	
+	cudacall(cudaMalloc((void** ) &user_bias, m * sizeof(user_bias[0])));
+	cudacall(cudaMalloc((void** ) &item_bias, n * sizeof(item_bias[0])));
+	cudacall(cudaMemset(user_bias, 0, m * sizeof(user_bias[0])));
+	cudacall(cudaMemset(item_bias, 0, n * sizeof(item_bias[0])));
 
 	printf("*******start copying memory to GPU...\n");
 
@@ -698,6 +808,12 @@ void doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const f
 		float * ythetaT = 0;
 		cudacall(cudaMalloc((void** ) &ytheta, f * m * sizeof(ytheta[0])));
 		cudacall(cudaMalloc((void** ) &ythetaT, f * m * sizeof(ythetaT[0])));
+
+		//normalize csrVal with bias terms
+		normalize_csr_ratings<<<m, 64>>>
+			(csrVal, csrRowIndex, csrColIndex, user_bias, item_bias, avg_rating, m);
+		cudaDeviceSynchronize();
+		cudaCheckError();
 
 		const float alpha = 1.0f;
 		const float beta = 0.0f;
@@ -781,7 +897,17 @@ void doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const f
 
 		gettimeofday(&start_tv, NULL);
 		printf("---------------------------------- ALS iteration %d, update theta ----------------------------------\n", iter);
+		
+		//normalize cscVal with bias terms
+
+		cudacall(cudaMemcpy(cscVal, cscValHostPtr,(size_t ) (nnz * sizeof(cscVal[0])),cudaMemcpyHostToDevice));
+		normalize_csc_ratings<<<n,64>>>
+			(cscVal, cscRowIndex, cscColIndex, user_bias, item_bias, avg_rating, n);
+		cudaDeviceSynchronize();
+		cudaCheckError();
+		
 		printf("\tgenerate: Y'*X using cusparse.\n");
+		
 		float * yTX = 0;
 		float * yTXT = 0;
 		cudacall(cudaMalloc((void** ) &yTXT, f * n * sizeof(yTXT[0])));
@@ -862,6 +988,40 @@ void doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const f
 				+ (tv.tv_usec - start_tv.tv_usec) / 1000000.0;
 		printf("update theta run %f seconds, gridSize: %d, blockSize %d.\n",
 				elapsed, n, f);
+
+		printf("update bias terms.\n");
+		cudacall(cudaMalloc((void** ) &csrVal, nnz * sizeof(csrVal[0])));
+		cudacall(cudaMemcpy(csrVal, csrValHostPtr,(size_t ) (nnz * sizeof(csrVal[0])),cudaMemcpyHostToDevice));
+		cudacall(cudaMalloc((void** ) &csrRowIndex, (m+1) * sizeof(csrRowIndex[0])));
+		cudacall(cudaMemcpy(csrRowIndex, csrRowIndexHostPtr,(size_t ) ((m+1) * sizeof(csrRowIndex[0])), cudaMemcpyHostToDevice));
+		cudacall(cudaMalloc((void** ) &csrColIndex, nnz * sizeof(csrColIndex[0])));
+		cudacall(cudaMemcpy(csrColIndex, csrColIndexHostPtr,(size_t ) (nnz * sizeof(csrColIndex[0])), cudaMemcpyHostToDevice));
+		normalize_csr_errors<<<m, 32>>>
+			(csrVal, csrRowIndex, csrColIndex, user_bias, item_bias, avg_rating, m, f, thetaT, XT, lambda);
+		cudaDeviceSynchronize();
+		cudaCheckError();
+
+		//load original cscVal
+		cudacall(cudaMemcpy(cscVal, cscValHostPtr,(size_t ) (nnz * sizeof(cscVal[0])),cudaMemcpyHostToDevice));
+		normalize_csc_errors<<<n, 32>>>
+			(cscVal, cscRowIndex, cscColIndex, user_bias, item_bias, avg_rating, n, f, thetaT, XT, lambda);
+		cudaDeviceSynchronize();
+		cudaCheckError();
+		//update user_bias <- csr*ones_m
+		cusparsecall (cusparseScsrmv(cushandle, CUSPARSE_OPERATION_NON_TRANSPOSE,
+			m, n, nnz, &alpha, descr, csrVal, csrRowIndex, csrColIndex, ones_n, &beta, user_bias) );
+		cudaDeviceSynchronize();
+		cudaCheckError();
+
+		//update item_bias <- csc*ones_n
+		cusparsecall (cusparseScsrmv(cushandle, CUSPARSE_OPERATION_NON_TRANSPOSE,
+			n, m, nnz, &alpha, descr, cscVal, cscColIndex, cscRowIndex, ones_m, &beta, item_bias) );
+		cudaDeviceSynchronize();
+		cudaCheckError();
+		
+		cudacall(cudaFree(csrRowIndex));
+		cudacall(cudaFree(csrColIndex));
+		cudacall(cudaFree(csrVal));
 		printf("Calculate RMSE.\n");
 		float * errors_train = 0;
 		int error_size = 1000;
@@ -876,7 +1036,7 @@ void doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const f
 		cudacall(cudaMemcpy(csrVal, csrValHostPtr,(size_t ) (nnz * sizeof(csrVal[0])),cudaMemcpyHostToDevice));
 
 		RMSE<<<(nnz-1)/256 + 1, 256>>>
-				(csrVal, cooRowIndex, csrColIndex, thetaT, XT, errors_train, nnz, error_size, f);
+				(csrVal, cooRowIndex, csrColIndex, thetaT, XT, errors_train, nnz, error_size, f, avg_rating, user_bias, item_bias);
 		cudaDeviceSynchronize();
 		cudaCheckError();
 		cudacall(cudaFree(cooRowIndex));
@@ -903,7 +1063,7 @@ void doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const f
 		cudacall(cudaMemcpy(cooVal_test, cooValHostTestPtr,(size_t ) (nnz_test * sizeof(cooVal_test[0])),cudaMemcpyHostToDevice));
 
 		RMSE<<<(nnz_test-1)/256, 256>>>(cooVal_test, cooRowIndex_test, cooColIndex_test, thetaT, XT,
-				errors_test, nnz_test, error_size, f);
+				errors_test, nnz_test, error_size, f, avg_rating, user_bias, item_bias);
 		cudaDeviceSynchronize();
 		cudaCheckError();
 
@@ -918,6 +1078,19 @@ void doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const f
 		cudacall(cudaFree(errors_test));
 		
 	}
+	/*
+	//save model to a file
+	cudacall(cudaMemcpy(ones_m_host, user_bias, (size_t ) (m * sizeof(user_bias[0])), cudaMemcpyDeviceToHost));
+	cudacall(cudaMemcpy(ones_n_host, item_bias, (size_t ) (n * sizeof(item_bias[0])), cudaMemcpyDeviceToHost));
+	FILE * user_file = fopen("user.bias", "wb");
+	FILE * item_file = fopen("item.bias", "wb");
+	fwrite(ones_m_host, sizeof(float), m, user_file);
+	fwrite(ones_n_host, sizeof(float), n, item_file);
+	fclose(user_file);
+	fclose(item_file);
+	*/
+
+	
 	//copy feature vectors back to host
 	cudacall(cudaMemcpy(thetaTHost, thetaT, (size_t ) (n * f * sizeof(thetaT[0])), cudaMemcpyDeviceToHost));
 	cudacall(cudaMemcpy(XTHost, XT, (size_t ) (m * f * sizeof(XT[0])), cudaMemcpyDeviceToHost));

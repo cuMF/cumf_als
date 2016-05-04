@@ -102,6 +102,9 @@ int main(int argc, char **argv) {
 	struct timeval tv0;
 	gettimeofday(&tv0, NULL);
 
+	//bias terms
+	float avg_rating = 0.0f;
+
 	loadCooSparseMatrixBin("./netflix/R_test_coo.data.bin", "./netflix/R_test_coo.row.bin","./netflix/R_test_coo.col.bin",
 	//loadCooSparseMatrixBin("./yahoo/yahoo_R_test_coo.data.bin", "./yahoo/yahoo_R_test_coo.row.bin", "./yahoo/yahoo_R_test_coo.col.bin",
 			cooValHostTestPtr, cooRowIndexTestHostPtr, cooColIndexTestHostPtr, nnz_test);
@@ -116,7 +119,6 @@ int main(int argc, char **argv) {
 
     loadCooSparseMatrixRowPtrBin("./netflix/R_train_coo.row.bin", cooRowIndexHostPtr, nnz);
     //loadCooSparseMatrixRowPtrBin("./yahoo/yahoo_R_train_coo.row.bin", cooRowIndexHostPtr, nnz);
-
 
     printf("\nloaded csr to host; print data, row and col array\n");
 	for (int i = 0; i < nnz && i < 10; i++) {
@@ -139,7 +141,7 @@ int main(int argc, char **argv) {
 			cooRowIndexHostPtr, thetaTHost, XTHost,
 			cooRowIndexTestHostPtr, cooColIndexTestHostPtr, cooValHostTestPtr,
 			m, n, f, nnz, nnz_test, lambda,
-			ITERS, X_BATCH, THETA_BATCH);
+			ITERS, X_BATCH, THETA_BATCH, avg_rating);
 	printf("doALS takes seconds: %.3f for F= %d\n", seconds() - t0, f);
 
 	/*

@@ -158,7 +158,7 @@ main: host_utilities.o als.o main.o
 	$(NVCC) $(ALL_LDFLAGS) $(GENCODE_FLAGS) -lineinfo -o $@ $+ $(LIBRARIES)
 #netflix
 run: main
-	./main 100 0.055 3
+	./main 100 0.05 3
 
 clean:
 	rm -f host_utilities.o als.o main main.o

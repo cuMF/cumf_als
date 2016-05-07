@@ -51,7 +51,7 @@ Users can prepare input to cuMF in text format, with each line like:
 As an example, we can start from the netflix data from [here](http://www.select.cs.cmu.edu/code/graphlab/datasets/).
 You can download netflix_mm and netflix_mme from the above [URL](http://www.select.cs.cmu.edu/code/graphlab/datasets/).
 
-#netflix_mm and netflix_mme look like
+The netflix_mm and netflix_mme files look like
 
 	% Generated 25-Sep-2011
 	480189 17770 99072112

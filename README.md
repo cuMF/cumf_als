@@ -38,6 +38,32 @@ Type:
 
 	make clean build
 
+To see debug message, such as run-time in each step, type:
+
+	make clean debug
+
+## Intput Data
+
+Users can prepare input to cuMF in text format, with each line like:
+
+	item_id user_d rating
+	
+As an example, we can start from the netflix data from [here](http://www.select.cs.cmu.edu/code/graphlab/datasets/).
+You can download netflix_mm and netflix_mme from the above [URL](http://www.select.cs.cmu.edu/code/graphlab/datasets/).
+
+#netflix_mm and netflix_mme look like
+
+	% Generated 25-Sep-2011
+	480189 17770 99072112
+	1 1  3
+	2 1  5
+	3 1  4
+	5 1  3
+	6 1  3
+	7 1  4
+	8 1  3
+
+Please refer to this python [script](https://github.com/wei-tan/CuMF/blob/master/scripts/prepare_input.ipynb) to prepare cuMF input data. 
 
 ## Run
 
@@ -59,6 +85,9 @@ We are trying to improve the usability, stability and performance. Here are some
 
 More details can be found at:
 
-1) CuMF: Large-Scale Matrix Factorization on Just One Machine with GPUs. Nvidia GTC 2016 talk. [ppt](http://www.slideshare.net/tanwei/s6211-cumf-largescale-matrix-factorization-on-just-one-machine-with-gpus), [video](http://on-demand.gputechconf.com/gtc/2016/video/S6211.html)
+1) Accelerate Recommender Systems with GPUs. Nvidia ParallelForAll [blog] ( https://devblogs.nvidia.com/parallelforall/accelerate-recommender-systems-with-gpus/).
 
-2) Faster and Cheaper: Parallelizing Large-Scale Matrix Factorization on GPUs. Wei Tan, [Liangliang Cao](https://github.com/llcao), [Liana Fong](https://github.com/llfong). [HPDC 2016], Kyoto, Japan. [(arXiv)](http://arxiv.org/abs/1603.03820)
+
+2) CuMF: Large-Scale Matrix Factorization on Just One Machine with GPUs. Nvidia GTC 2016 talk. [ppt](http://www.slideshare.net/tanwei/s6211-cumf-largescale-matrix-factorization-on-just-one-machine-with-gpus), [video](http://on-demand.gputechconf.com/gtc/2016/video/S6211.html)
+
+3) Faster and Cheaper: Parallelizing Large-Scale Matrix Factorization on GPUs. Wei Tan, [Liangliang Cao](https://github.com/llcao), [Liana Fong](https://github.com/llfong). [HPDC 2016], Kyoto, Japan. [(arXiv)](http://arxiv.org/abs/1603.03820)

@@ -18,7 +18,9 @@
 
 void loadCSRSparseMatrixBin(const char* dataFile, const char* rowFile, const char* colFile,
 		float* data, int* row, int* col, const int m, const long nnz) {
+	#ifdef DEBUG
     printf("\n loading CSR...\n");
+	#endif
 	FILE *dFile = fopen(dataFile,"rb");
 	FILE *rFile = fopen(rowFile,"rb");
 	FILE *cFile = fopen(colFile,"rb");
@@ -39,7 +41,9 @@ void loadCSRSparseMatrixBin(const char* dataFile, const char* rowFile, const cha
 
 void loadCSCSparseMatrixBin(const char* dataFile, const char* rowFile, const char* colFile,
 		float * data, int* row, int* col, const int n, const long nnz) {
+	#ifdef DEBUG		
     printf("\n loading CSC...\n");
+	#endif
 
 	FILE *dFile = fopen(dataFile,"rb");
 	FILE *rFile = fopen(rowFile,"rb");
@@ -60,7 +64,9 @@ void loadCSCSparseMatrixBin(const char* dataFile, const char* rowFile, const cha
 }
 
 void loadCooSparseMatrixRowPtrBin(const char* rowFile, int* row, const long nnz) {
+	#ifdef DEBUG
     printf("\n loading COO Row...\n");
+	#endif
 	FILE *rfile = fopen(rowFile,"rb");
 	fread(&row[0], 4*nnz ,1, rfile);
 	fclose(rfile);
@@ -68,7 +74,9 @@ void loadCooSparseMatrixRowPtrBin(const char* rowFile, int* row, const long nnz)
 
 void loadCooSparseMatrixBin(const char* dataFile, const char* rowFile, const char* colFile,
 		float* data, int* row, int* col, const long nnz) {
+	#ifdef DEBUG
     printf("\n loading COO...\n");
+	#endif
 
 	FILE *dFile = fopen(dataFile,"rb");
 	FILE *rFile = fopen(rowFile,"rb");

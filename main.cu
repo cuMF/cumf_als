@@ -117,7 +117,7 @@ int main(int argc, char **argv) {
     loadCooSparseMatrixRowPtrBin("./netflix/R_train_coo.row.bin", cooRowIndexHostPtr, nnz);
     //loadCooSparseMatrixRowPtrBin("./yahoo/yahoo_R_train_coo.row.bin", cooRowIndexHostPtr, nnz);
 
-
+	#ifdef DEBUG
     printf("\nloaded csr to host; print data, row and col array\n");
 	for (int i = 0; i < nnz && i < 10; i++) {
 		printf("%.1f ", csrValHostPtr[i]);
@@ -132,7 +132,8 @@ int main(int argc, char **argv) {
 		printf("%d ", csrColIndexHostPtr[i]);
 	}
 	printf("\n");
-
+	#endif
+	
 	double t0 = seconds();
 	doALS(csrRowIndexHostPtr, csrColIndexHostPtr, csrValHostPtr,
 			cscRowIndexHostPtr, cscColIndexHostPtr, cscValHostPtr,

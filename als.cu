@@ -53,11 +53,12 @@ __global__ void fp32Array2fp16Array(const float * fp32Array, half* fp16Array,
 int updateX(const int batch_size, const int batch_offset, float * ythetaT, float * tt, float * XT,
 		cublasHandle_t handle, const int m, const int n, const int f, const int nnz,
 		float** devPtrTTHost, float **devPtrYthetaTHost){
-	//variables for timing
+	#ifdef DEBUG
 	float elapsed;
 	struct timeval tv0, tv1, tv2;
 	gettimeofday(&tv0, NULL);
 	printf("*******Batch LU factorization of tt.\n");
+	#endif
 	//pointers needed by batch op
 	float **devPtrTT = 0;
 	int *INFO;
@@ -71,12 +72,14 @@ int updateX(const int batch_size, const int batch_offset, float * ythetaT, float
 	cublascall(cublasSgetrfBatched(handle, f, devPtrTT, f, NULL, INFO, batch_size));
 
 	cudaThreadSynchronize();
+	#ifdef DEBUG
 	gettimeofday(&tv1, NULL);
 	elapsed = (tv1.tv_sec - tv0.tv_sec)
 			+ (tv1.tv_usec - tv0.tv_usec) / 1000000.0;
 	printf("\t %f seconds. \n", elapsed);
 
 	printf("*******solve: tt * XT = ythetaT use cublas, with LU decomposition.\n");
+	#endif
 
 	float **devPtrYthetaT = 0;
 
@@ -99,10 +102,12 @@ int updateX(const int batch_size, const int batch_offset, float * ythetaT, float
 
 	cudacall( cudaMemcpy(&XT[batch_offset * f], &ythetaT[batch_offset * f],
 			batch_size * f * sizeof(float), cudaMemcpyDeviceToDevice) );
+	#ifdef DEBUG
 	gettimeofday(&tv2, NULL);
 	elapsed = (tv2.tv_sec - tv1.tv_sec)
 			+ (tv2.tv_usec - tv1.tv_usec) / 1000000.0;
 	printf("\t %f seconds. \n", elapsed);
+	#endif
 
 	cudacall(cudaFree(devPtrTT));
 	//cudacall(cudaFree(P));
@@ -117,12 +122,12 @@ int updateTheta(const int batch_size, const int batch_offset, float * xx,
 		 const int m, const int n, const int f, const int nnz,
 		 float ** devPtrXXHost, float **devPtrYTXTHost ){
 
-	//variables for timing
+	#ifdef DEBUG
 	float elapsed;
 	struct timeval tv0, tv1, tv2;
-
 	gettimeofday(&tv0, NULL);
 	printf("*******LU factorize xx.\n");
+	#endif
 	float **devPtrXX = 0;
 
 	for (int k = 0; k < batch_size; k++) {
@@ -135,14 +140,14 @@ int updateTheta(const int batch_size, const int batch_offset, float * xx,
 	cudacall(cudaMalloc(&INFO, batch_size * sizeof(int)));
 	cublascall(cublasSgetrfBatched(handle, f, devPtrXX, f, NULL, INFO, batch_size));
 	cudaThreadSynchronize();
-
+	#ifdef DEBUG
 	gettimeofday(&tv1, NULL);
 	elapsed = (tv1.tv_sec - tv0.tv_sec)
 			+ (tv1.tv_usec - tv0.tv_usec) / 1000000.0;
 	printf("\t %f seconds. \n", elapsed);
 
 	printf("******* solve xx * thetaT = yTXT with CUDA 7.\n");
-
+	#endif
 	float **devPtrYTXT = 0;
 
 	for (int k = 0; k < batch_size; k++) {
@@ -164,10 +169,12 @@ int updateTheta(const int batch_size, const int batch_offset, float * xx,
 
 	cudacall( cudaMemcpy( &thetaT[batch_offset * f], &yTXT[batch_offset * f],
 	                        batch_size * f * sizeof(float), cudaMemcpyDeviceToDevice) );
+	#ifdef DEBUG
 	gettimeofday(&tv2, NULL);
 	elapsed = (tv2.tv_sec - tv1.tv_sec)
 			+ (tv2.tv_usec - tv1.tv_usec) / 1000000.0;
 	printf("\t %f seconds. \n", elapsed);
+	#endif
 
 	cudaFree(devPtrXX);
 	cudaFree(INFO);
@@ -676,15 +683,19 @@ void doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const f
 	cusparseSetMatType(descr, CUSPARSE_MATRIX_TYPE_GENERAL);
 	cusparseSetMatIndexBase(descr, CUSPARSE_INDEX_BASE_ZERO);
 	using namespace std;
+	#ifdef DEBUG
 	//variable used to time
 	double elapsed = 0.0;
 	struct timeval tv;
 	struct timeval start_tv;
 	struct timeval start_tv2;
+	#endif
 
 	for(int iter = 0; iter < ITERS ; iter ++){
+		#ifdef DEBUG
 		printf("---------------------------ALS iteration %d, update X.----------------------------------\n", iter);
 		gettimeofday(&start_tv, NULL);
+		#endif
 		//copy csr matrix in
 		cudacall(cudaMalloc((void** ) &csrRowIndex,(m + 1) * sizeof(csrRowIndex[0])));
 		cudacall(cudaMalloc((void** ) &csrColIndex, nnz * sizeof(csrColIndex[0])));
@@ -692,8 +703,9 @@ void doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const f
 		cudacall(cudaMemcpy(csrRowIndex, csrRowIndexHostPtr,(size_t ) ((m + 1) * sizeof(csrRowIndex[0])), cudaMemcpyHostToDevice));
 		cudacall(cudaMemcpy(csrColIndex, csrColIndexHostPtr,(size_t ) (nnz * sizeof(csrColIndex[0])), cudaMemcpyHostToDevice));
 		cudacall(cudaMemcpy(csrVal, csrValHostPtr,(size_t ) (nnz * sizeof(csrVal[0])),cudaMemcpyHostToDevice));
-
+		#ifdef DEBUG
 		printf("\tgenerate: Y*theta using cusparse.\n");
+		#endif
 		float * ytheta = 0;
 		float * ythetaT = 0;
 		cudacall(cudaMalloc((void** ) &ytheta, f * m * sizeof(ytheta[0])));
@@ -713,15 +725,19 @@ void doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const f
 		cudaCheckError();
 		cudacall(cudaFree(ytheta));
 		cudacall(cudaFree(csrVal));
+		#ifdef DEBUG
 		gettimeofday(&tv, NULL);
 		elapsed = (tv.tv_sec - start_tv.tv_sec)
 				+ (tv.tv_usec - start_tv.tv_usec) / 1000000.0;
 		printf("\tgenerate: Y*theta run %f seconds.\n", elapsed);
+		#endif
 
 		int block_dim = f/T10*(f/T10+1)/2;
 		if (block_dim < f/2) block_dim = f/2;
 		for(int batch_id = 0; batch_id< X_BATCH; batch_id ++){
+			#ifdef DEBUG
 			printf("*******batch %d / %d.*******\n", batch_id, X_BATCH);
+			#endif
 			int batch_size = 0;
 			if(batch_id != X_BATCH - 1)
 				batch_size = m/X_BATCH;
@@ -729,8 +745,10 @@ void doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const f
 				batch_size = m - batch_id*(m/X_BATCH);
 			int batch_offset = batch_id * (m/X_BATCH);
 			cudacall(cudaMalloc((void** ) &tt, f * f * batch_size * sizeof(float)));
+			#ifdef DEBUG
 			gettimeofday(&start_tv2, NULL);
 			printf("\tupdateXByBlock kernel.\n");
+			#endif
 			if(f == 100){
 				//do not use fp16 by default
 				#ifdef CUMF_USE_HALF
@@ -750,38 +768,45 @@ void doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const f
 					(batch_offset, tt, csrRowIndex, csrColIndex, lambda, m, f, thetaT);
 			cudaDeviceSynchronize();
 			cudaCheckError();
+			#ifdef DEBUG
 			gettimeofday(&tv, NULL);
 			elapsed = (tv.tv_sec - start_tv2.tv_sec)
 					+ (tv.tv_usec - start_tv2.tv_usec) / 1000000.0;
 			printf("\tupdate X kernel run %f seconds, gridSize: %d, blockSize %d.\n", elapsed, batch_size, f);
-
-			//host pointers for cublas batch operations
 			double t0 = seconds();
+			#endif
+			//host pointers for cublas batch operations
 			float ** devPtrTTHost = 0;
 			cudacall(cudaMallocHost( (void** ) &devPtrTTHost, batch_size * sizeof(*devPtrTTHost) ) );
 			float **devPtrYthetaTHost = 0;
 			cudacall(cudaMallocHost( (void** ) &devPtrYthetaTHost, batch_size * sizeof(*devPtrYthetaTHost) ) );
-
+			#ifdef DEBUG
 			printf("\tinvoke updateX with batch_size: %d, batch_offset: %d..\n", batch_size, batch_offset);
+			#endif
 			updateX(batch_size, batch_offset, ythetaT, tt, XT, handle, m, n, f, nnz,
 					devPtrTTHost, devPtrYthetaTHost);
-
+			#ifdef DEBUG
 			printf("\tupdateX run seconds: %f \n", seconds() - t0);
+			#endif
 			cudacall(cudaFree(tt));
 			cudacall(cudaFreeHost(devPtrTTHost));
 			cudacall(cudaFreeHost(devPtrYthetaTHost));
 		}
+		#ifdef DEBUG
 		gettimeofday(&tv, NULL);
 		elapsed = (tv.tv_sec - start_tv.tv_sec)
 				+ (tv.tv_usec - start_tv.tv_usec) / 1000000.0;
 		printf("update X run %f seconds, gridSize: %d, blockSize %d.\n", elapsed, m, f);
+		#endif
 		cudacall(cudaFree(csrRowIndex));
 		cudacall(cudaFree(csrColIndex));
 		cudacall(cudaFree(ythetaT));
-
+		
+		#ifdef DEBUG
 		gettimeofday(&start_tv, NULL);
 		printf("---------------------------------- ALS iteration %d, update theta ----------------------------------\n", iter);
 		printf("\tgenerate: Y'*X using cusparse.\n");
+		#endif
 		float * yTX = 0;
 		float * yTXT = 0;
 		cudacall(cudaMalloc((void** ) &yTXT, f * n * sizeof(yTXT[0])));
@@ -796,13 +821,17 @@ void doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const f
 				(const float * ) yTX, n, &beta, yTXT, f, yTXT, f));
 		cudaDeviceSynchronize();
 		cudacall(cudaFree(yTX));
+		#ifdef DEBUG
 		gettimeofday(&tv, NULL);
 		elapsed = (tv.tv_sec - start_tv.tv_sec)
 				+ (tv.tv_usec - start_tv.tv_usec) / 1000000.0;
 		printf("\tgenerate: Y'*X run %f seconds.\n", elapsed);
+		#endif
 		//in batches, when N is huge
 		for(int batch_id = 0; batch_id< THETA_BATCH; batch_id ++){
+			#ifdef DEBUG
 			printf("*******batch %d / %d.*******\n", batch_id, THETA_BATCH);
+			#endif
 			int batch_size = 0;
 			if(batch_id != THETA_BATCH - 1)
 				batch_size = n/THETA_BATCH;
@@ -813,9 +842,10 @@ void doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const f
 			float * xx = 0;
 			cudacall(cudaMalloc((void** ) &xx, f * f * batch_size * sizeof(xx[0])));
 			cudacall( cudaMemset(xx, 0, f*f*batch_size*sizeof(float)) );
-
+			#ifdef DEBUG
 			gettimeofday(&start_tv2, NULL);
 			printf("\tupdateThetaByBlock kernel.\n");
+			#endif
 			//get_hermitian_theta<<<batch_size, 64>>>(batch_offset, xx, cscRowIndex, cscColIndex, lambda, n);
 			//updateThetaByBlock2pRegDsmemTile<<<batch_size, F>>>
 			if(f == 100){
@@ -836,33 +866,40 @@ void doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const f
 					(batch_offset, xx, cscColIndex, cscRowIndex, lambda, n, f, XT);
 			cudaDeviceSynchronize();
 			cudaCheckError();
-
+			#ifdef DEBUG
 			gettimeofday(&tv, NULL);
 			elapsed = (tv.tv_sec - start_tv2.tv_sec)
 					+ (tv.tv_usec - start_tv2.tv_usec) / 1000000.0;
 			printf("\tupdate Theta kernel run %f seconds, gridSize: %d, blockSize %d.\n",
 					elapsed, batch_size, f);
-
 			double t0 = seconds();
+			#endif
+			
 			float ** devPtrXXHost = 0;
 			cudacall(cudaMallocHost( (void** ) &devPtrXXHost, batch_size * sizeof(*devPtrXXHost) ) );
 			float **devPtrYTXTHost = 0;
 			cudacall(cudaMallocHost( (void** ) &devPtrYTXTHost, batch_size * sizeof(*devPtrYTXTHost) ) );
+			#ifdef DEBUG
 			printf("*******invoke updateTheta with batch_size: %d, batch_offset: %d.\n", batch_size, batch_offset);
+			#endif
 			updateTheta(batch_size, batch_offset, xx, yTXT, thetaT, handle, m,  n,  f,  nnz,
 					devPtrXXHost, devPtrYTXTHost);
+			#ifdef DEBUG
 			printf("\tupdateTheta run seconds: %f \n", seconds() - t0);
+			#endif
 			cudacall(cudaFree(xx));
 			cudacall(cudaFreeHost(devPtrXXHost));
 			cudacall(cudaFreeHost(devPtrYTXTHost));
 		}
 		cudacall(cudaFree(yTXT));
+		#ifdef DEBUG
 		gettimeofday(&tv, NULL);
 		elapsed = (tv.tv_sec - start_tv.tv_sec)
 				+ (tv.tv_usec - start_tv.tv_usec) / 1000000.0;
 		printf("update theta run %f seconds, gridSize: %d, blockSize %d.\n",
 				elapsed, n, f);
 		printf("Calculate RMSE.\n");
+		#endif
 		float * errors_train = 0;
 		int error_size = 1000;
 		cudacall(cudaMalloc((void** ) &errors_train, error_size * sizeof(errors_train[0])));
@@ -887,7 +924,7 @@ void doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const f
 		cublascall( cublasSasum(handle, error_size, errors_train, 1, rmse_train) );
 
 		cudaDeviceSynchronize();
-		printf("@@@@@@@@@@@@@@@@@@@ Train RMSE in iter %d: %f\n", iter, sqrt((*rmse_train)/nnz));
+		printf("--------- Train RMSE in iter %d: %f\n", iter, sqrt((*rmse_train)/nnz));
 		cudacall(cudaFree(errors_train));
 
 		
@@ -914,7 +951,7 @@ void doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const f
 		float* rmse_test = (float*) malloc (sizeof(float));
 		cublascall( cublasSasum(handle, error_size, errors_test, 1, rmse_test) );
 		cudaDeviceSynchronize();
-		printf("@@@@@@@@@@@@@@@@@@@ Test RMSE in iter %d: %f\n", iter, sqrt((*rmse_test)/nnz_test));
+		printf("--------- Test RMSE in iter %d: %f\n", iter, sqrt((*rmse_test)/nnz_test));
 		cudacall(cudaFree(errors_test));
 		
 	}

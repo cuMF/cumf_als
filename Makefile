@@ -147,7 +147,11 @@ LIBRARIES +=-lcublas -lcusparse #-llapack -lblas -lmagma -lm -ltest -llapacktest
 # Target rules
 all: build
 
-build: main
+build: clean main
+debug:	clean
+debug:	ALL_CCFLAGS+=-DDEBUG
+debug:	build 
+
 als.o:als.cu
 	$(NVCC) $(INCLUDES) $(ALL_CCFLAGS) $(GENCODE_FLAGS) -lineinfo -o $@ -c $<
 main.o:main.cu

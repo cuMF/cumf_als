@@ -4,7 +4,7 @@
 # In[1]:
 
 import tensorflow as tf
-lib_path = '/home/wtan/gpu/git/CuMF/tensorflow/als_tf.so'
+lib_path = './als_tf.so'
 als_module = tf.load_op_library(lib_path)
 
 
@@ -51,4 +51,9 @@ sess = tf.Session(config=tf.ConfigProto(log_device_placement=True))
 with sess:
     print sess.run(hello)    
     print sess.run(rmse)
+
+
+# In[ ]:
+
+
 

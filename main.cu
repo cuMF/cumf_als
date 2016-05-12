@@ -140,7 +140,7 @@ int main(int argc, char **argv) {
 			cooRowIndexHostPtr, thetaTHost, XTHost,
 			cooRowIndexTestHostPtr, cooColIndexTestHostPtr, cooValHostTestPtr,
 			m, n, f, nnz, nnz_test, lambda,
-			ITERS, X_BATCH, THETA_BATCH);
+			ITERS, X_BATCH, THETA_BATCH, 0);
 	printf("doALS takes seconds: %.3f for F= %d\n", seconds() - t0, f);
 
 	/*

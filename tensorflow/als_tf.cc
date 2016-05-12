@@ -1,6 +1,9 @@
 #include "tensorflow/core/framework/op.h"
 #include "tensorflow/core/framework/op_kernel.h"
-
+/* This is NOT a TF GPU op, instead it is a CPU op invoking GPUs
+*  In future we should wrap individual cuMF kernels as TF ops, 
+*  and use TF to write the glue code which is currently in c
+*/
 REGISTER_OP("DoAls")
     .Input("csrrow: int32")
 	.Input("csrcol: int32")

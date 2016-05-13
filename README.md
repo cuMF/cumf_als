@@ -42,7 +42,7 @@ To see debug message, such as run-time in each step, type:
 
 	make clean debug
 
-## Intput Data
+## Input Data
 
 Users can prepare input to cuMF in text format, with each line like:
 

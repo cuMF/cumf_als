@@ -1,5 +1,5 @@
 /*
- * test-als.cu
+ * als_main.cu
  *
  *  Created on: Feb 10, 2015
  *      Author: Wei Tan (wtan@us.ibm.com)
@@ -8,6 +8,9 @@
  *  Code optimized for F = 100, and on cc 3.5, 3.7 platforms. Also tested in cc 5.2
  */
 #include "als.h"
+#include "host_utilities.h"
+#include <fstream>
+
 #define DEVICEID 0
 #define ITERS 10
 
@@ -114,7 +117,7 @@ int main(int argc, char **argv) {
     loadCooSparseMatrixRowPtrBin("./netflix/R_train_coo.row.bin", cooRowIndexHostPtr, nnz);
     //loadCooSparseMatrixRowPtrBin("./yahoo/yahoo_R_train_coo.row.bin", cooRowIndexHostPtr, nnz);
 
-
+	#ifdef DEBUG
     printf("\nloaded csr to host; print data, row and col array\n");
 	for (int i = 0; i < nnz && i < 10; i++) {
 		printf("%.1f ", csrValHostPtr[i]);
@@ -129,14 +132,15 @@ int main(int argc, char **argv) {
 		printf("%d ", csrColIndexHostPtr[i]);
 	}
 	printf("\n");
-
+	#endif
+	
 	double t0 = seconds();
 	doALS(csrRowIndexHostPtr, csrColIndexHostPtr, csrValHostPtr,
 			cscRowIndexHostPtr, cscColIndexHostPtr, cscValHostPtr,
 			cooRowIndexHostPtr, thetaTHost, XTHost,
 			cooRowIndexTestHostPtr, cooColIndexTestHostPtr, cooValHostTestPtr,
 			m, n, f, nnz, nnz_test, lambda,
-			ITERS, X_BATCH, THETA_BATCH);
+			ITERS, X_BATCH, THETA_BATCH, 0);
 	printf("doALS takes seconds: %.3f for F= %d\n", seconds() - t0, f);
 
 	/*

@@ -147,18 +147,24 @@ LIBRARIES +=-lcublas -lcusparse #-llapack -lblas -lmagma -lm -ltest -llapacktest
 # Target rules
 all: build
 
-build: test-als
+build: clean main
+debug:	clean
+debug:	ALL_CCFLAGS+=-DDEBUG
+debug:	build 
+
 als.o:als.cu
 	$(NVCC) $(INCLUDES) $(ALL_CCFLAGS) $(GENCODE_FLAGS) -lineinfo -o $@ -c $<
-test-als.o:test-als.cu
+main.o:main.cu
 	$(NVCC) $(INCLUDES) $(ALL_CCFLAGS) $(GENCODE_FLAGS) -lineinfo -o $@ -c $<
-test-als: als.o test-als.o
+host_utilities.o:host_utilities.cpp
+	$(NVCC) $(INCLUDES) $(ALL_CCFLAGS) $(GENCODE_FLAGS) -lineinfo -o $@ -c $<
+main: host_utilities.o als.o main.o
 	$(NVCC) $(ALL_LDFLAGS) $(GENCODE_FLAGS) -lineinfo -o $@ $+ $(LIBRARIES)
-
-run: build
-	./test-als
+#netflix
+run: main
+	./main 100 0.055 3
 
 clean:
-	rm -f als.o test-als test-als.o
+	rm -f host_utilities.o als.o main main.o
 
 clobber: clean

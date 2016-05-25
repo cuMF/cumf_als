@@ -963,5 +963,7 @@ void doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const f
 	cudacall(cudaFree(cscVal));
 	cudacall(cudaFree(cscColIndex));
 	cudacall(cudaFree(cscRowIndex));
-	cudacall(cudaDeviceReset());
+	//WARN: do not call it inside ALS() 
+	//because the caller needs to access XT and thetaT which was in the same context
+	//cudacall(cudaDeviceReset());
 }

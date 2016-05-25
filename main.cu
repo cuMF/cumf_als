@@ -9,7 +9,7 @@
  */
 #include "als.h"
 #include "host_utilities.h"
-#include <fstream>
+#include<stdio.h>
 
 #define DEVICEID 0
 #define ITERS 10
@@ -132,23 +132,23 @@ int main(int argc, char **argv) {
 		printf("%d ", csrColIndexHostPtr[i]);
 	}
 	printf("\n");
-	#endif
 	
+	#endif
 	double t0 = seconds();
+	
 	doALS(csrRowIndexHostPtr, csrColIndexHostPtr, csrValHostPtr,
 			cscRowIndexHostPtr, cscColIndexHostPtr, cscValHostPtr,
 			cooRowIndexHostPtr, thetaTHost, XTHost,
 			cooRowIndexTestHostPtr, cooColIndexTestHostPtr, cooValHostTestPtr,
 			m, n, f, nnz, nnz_test, lambda,
 			ITERS, X_BATCH, THETA_BATCH);
-	printf("doALS takes seconds: %.3f for F= %d\n", seconds() - t0, f);
+	printf("\ndoALS takes seconds: %.3f for F= %d\n", seconds() - t0, f);
 
 	/*
-	//save model to a file
-	cudacall(cudaMemcpy(thetaTHost, thetaT[0], n * f * sizeof(float), cudaMemcpyDeviceToHost) );
+	//write out the model	
 	FILE * xfile = fopen("XT.data", "wb");
 	FILE * thetafile = fopen("thetaT.data", "wb");
-	fwrite(XT_h, sizeof(float), m*f, xfile);
+	fwrite(XTHost, sizeof(float), m*f, xfile);
 	fwrite(thetaTHost, sizeof(float), n*f, thetafile);
 	fclose(xfile);
 	fclose(thetafile);
@@ -161,9 +161,10 @@ int main(int argc, char **argv) {
 	cudaFreeHost(cscRowIndexHostPtr);
 	cudaFreeHost(cscColIndexHostPtr);
 	cudaFreeHost(cooRowIndexHostPtr);
+	cudaFreeHost(XTHost);
 	cudaFreeHost(thetaTHost);
 	cudacall(cudaDeviceReset());
-	printf("ALS Done.\n");
+	printf("\nALS Done.\n");
 	return 0;
 }
 

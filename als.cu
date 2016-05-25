@@ -630,13 +630,15 @@ get_hermitianT10(const int batch_offset, float* tt,
 	}
 }
 
-void doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const float* csrValHostPtr,
+float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const float* csrValHostPtr,
 		const int* cscRowIndexHostPtr, const int* cscColIndexHostPtr, const float* cscValHostPtr,
 		const int* cooRowIndexHostPtr, float* thetaTHost, float* XTHost,
 		const int * cooRowIndexTestHostPtr, const int * cooColIndexTestHostPtr, const float * cooValHostTestPtr,
 		const int m, const int n, const int f, const long nnz, const long nnz_test, const float lambda,
-		const int ITERS, const int X_BATCH, const int THETA_BATCH)
+		const int ITERS, const int X_BATCH, const int THETA_BATCH, const int DEVICEID)
 {
+	cudaSetDevice(DEVICEID);
+	printf("*******parameters: m: %d, n:  %d, f: %d, nnz: %ld \n", m, n, f, nnz);
 	//device pointers
 	int * csrRowIndex = 0;
 	int * csrColIndex = 0;
@@ -652,6 +654,7 @@ void doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const f
 	float * cooVal_test;
 	int * cooRowIndex_test;
 	int * cooColIndex_test;
+	float final_rmse;
 	printf("*******start allocating memory on GPU...\n");
 	cudacall(cudaMalloc((void** ) &cscRowIndex,nnz * sizeof(cscRowIndex[0])));
 	cudacall(cudaMalloc((void** ) &cscColIndex, (n+1) * sizeof(cscColIndex[0])));
@@ -951,7 +954,8 @@ void doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const f
 		float* rmse_test = (float*) malloc (sizeof(float));
 		cublascall( cublasSasum(handle, error_size, errors_test, 1, rmse_test) );
 		cudaDeviceSynchronize();
-		printf("--------- Test RMSE in iter %d: %f\n", iter, sqrt((*rmse_test)/nnz_test));
+		final_rmse = sqrt((*rmse_test)/nnz_test);
+		printf("--------- Test RMSE in iter %d: %f\n", iter, final_rmse);
 		cudacall(cudaFree(errors_test));
 		
 	}
@@ -963,7 +967,12 @@ void doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const f
 	cudacall(cudaFree(cscVal));
 	cudacall(cudaFree(cscColIndex));
 	cudacall(cudaFree(cscRowIndex));
+<<<<<<< HEAD
 	//WARN: do not call it inside ALS() 
 	//because the caller needs to access XT and thetaT which was in the same context
 	//cudacall(cudaDeviceReset());
+=======
+	cudacall(cudaDeviceReset());
+	return final_rmse;
+>>>>>>> bebf27c97615ecc16dba915457dbd87006c68afc
 }

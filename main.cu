@@ -141,8 +141,13 @@ int main(int argc, char **argv) {
 			cooRowIndexHostPtr, thetaTHost, XTHost,
 			cooRowIndexTestHostPtr, cooColIndexTestHostPtr, cooValHostTestPtr,
 			m, n, f, nnz, nnz_test, lambda,
+<<<<<<< HEAD
 			ITERS, X_BATCH, THETA_BATCH);
 	printf("\ndoALS takes seconds: %.3f for F= %d\n", seconds() - t0, f);
+=======
+			ITERS, X_BATCH, THETA_BATCH, 0);
+	printf("doALS takes seconds: %.3f for F= %d\n", seconds() - t0, f);
+>>>>>>> bebf27c97615ecc16dba915457dbd87006c68afc
 
 	/*
 	//write out the model	

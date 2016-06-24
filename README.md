@@ -80,7 +80,7 @@ E.g., for yahooMusic data set, use:
 
 Prepare the data as instructed in the previous section, before you run.
 
-Note: rank value F has to be a multiply of 10, e.g., 10, 50, 100, 200). 
+Note: rank value F has to be a multiply of 10, e.g., 10, 50, 100, 200. 
 
 ## Known Issues
 We are trying to improve the usability, stability and performance. Here are some known issues we are working on:

@@ -47,7 +47,7 @@ NVCC := $(CUDA_PATH)/bin/nvcc -ccbin $(GCC)
 
 # internal flags
 
-NVCCFLAGS   := -m${OS_SIZE} ${ARCH_FLAGS} --ptxas-options=-v #--maxrregcount 255
+NVCCFLAGS   := -m${OS_SIZE} ${ARCH_FLAGS} #--ptxas-options=-v --maxrregcount 255
 CCFLAGS     := -DADD_
 LDFLAGS     :=
 
@@ -110,8 +110,8 @@ ALL_LDFLAGS += $(addprefix -Xlinker ,$(LDFLAGS))
 ALL_LDFLAGS += $(addprefix -Xlinker ,$(EXTRA_LDFLAGS))
 
 # Common includes and paths for CUDA
-INCLUDES  := -I../../common/inc -I/u/weitan/gpfs/software/magma-2.0.0/include  -I/u/weitan/gpfs/software/magma-2.0.0/control -I/u/weitan/gpfs/software/magma-2.0.0/testing
-LIBRARIES := -L/u/weitan/gpfs/software/magma-2.0.0/lib -L/opt/share/OpenBLAS-0.2.14/lib -L/u/weitan/gpfs/software/magma-2.0.0/testing -L/u/weitan/gpfs/software/magma-2.0.0/testing/lin
+#INCLUDES  := -I../../common/inc -I/u/weitan/gpfs/software/magma-2.0.0/include  -I/u/weitan/gpfs/software/magma-2.0.0/control -I/u/weitan/gpfs/software/magma-2.0.0/testing
+#LIBRARIES := -L/u/weitan/gpfs/software/magma-2.0.0/lib -L/opt/share/OpenBLAS-0.2.14/lib -L/u/weitan/gpfs/software/magma-2.0.0/testing -L/u/weitan/gpfs/software/magma-2.0.0/testing/lin
 
 ################################################################################
 
@@ -154,7 +154,7 @@ debug:	build
 
 als.o:als.cu
 	$(NVCC) $(INCLUDES) $(ALL_CCFLAGS) $(GENCODE_FLAGS) -lineinfo -o $@ -c $<
-main.o:main.cu
+main.o:main.cpp
 	$(NVCC) $(INCLUDES) $(ALL_CCFLAGS) $(GENCODE_FLAGS) -lineinfo -o $@ -c $<
 host_utilities.o:host_utilities.cpp
 	$(NVCC) $(INCLUDES) $(ALL_CCFLAGS) $(GENCODE_FLAGS) -lineinfo -o $@ -c $<
@@ -162,8 +162,7 @@ main: host_utilities.o als.o main.o
 	$(NVCC) $(ALL_LDFLAGS) $(GENCODE_FLAGS) -lineinfo -o $@ $+ $(LIBRARIES)
 #netflix
 run: main
-	./main 100 0.055 3
-
+	 ./main 17770 480189 100 99072112 1408395 0.058 1 3 ./data/netflix/
 clean:
 	rm -f host_utilities.o als.o main main.o
 

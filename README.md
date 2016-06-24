@@ -16,7 +16,7 @@ With only a single machine with four Nvidia GPU cards, cuMF can be 6-10 times as
 
 CuMF achieves excellent scalability and performance by innovatively applying the following techniques on GPUs:  
 
-(1) On a single GPU, MF deals with sparse matrices, which makes it difficult to utilize GPU's compute power. We optimize memory access in ALS by various techniques including reducing discontiguous memory access, retaining hotspot variables in faster memory, and aggressively using registers. By this means cuMF gets closer to the roofline performance of a single GPU. 
+(1) On one GPU, MF deals with sparse matrices, which makes it difficult to utilize GPU's compute power. We optimize memory access in ALS by various techniques including reducing discontiguous memory access, retaining hotspot variables in faster memory, and aggressively using registers. By this means cuMF gets closer to the roofline performance of a single GPU. 
 
 (2) On multiple GPUs, we add data parallelism to ALS's inherent model parallelism. Data parallelism needs a faster reduction operation among GPUs, leading to (3).
 
@@ -30,7 +30,7 @@ We modified Spark's ml/recommendation/als.scala ([code](https://github.com/wei-t
 
 <img src=https://github.com/wei-tan/CUDA-MLlib/raw/master/als/images/spark-gpu.png width=380 height=240 />
 
-This approach has several advantages. First, existing Spark applications relying on mllib/ALS need no change. Second, we leverage the best of Spark (to scale-out to multiple nodes) and GPU (to scale-up in one node). Check this GitHub [project](https://github.com/wei-tan/CUDA-MLlib/tree/master/als) for more details.
+This approach has several advantages. First, existing apps relying on mllib/ALS need no change. Second, we leverage the best of Spark (to scale-out to multiple nodes) and GPU (to scale-up in one node). Check this GitHub [project](https://github.com/wei-tan/CUDA-MLlib/tree/master/als) for more details.
 
 ## Build
 
@@ -44,40 +44,42 @@ To see debug message, such as run-time in each step, type:
 
 ## Input Data
 
-Users can prepare input to cuMF in text format, with each line like:
+CuMF need training and testing rating matrices in binary format, and in CSR, CSC and COO formats. In ./data/netflix and ./data/ml10M we have already prepared (i)python scripts to download Netflix and Movielens 10M data, and preprocess them, respectively.
 
-	item_id user_d rating
-	
-As an example, we can start from the netflix data from [here](http://www.select.cs.cmu.edu/code/graphlab/datasets/).
-You can download netflix_mm and netflix_mme from the above [URL](http://www.select.cs.cmu.edu/code/graphlab/datasets/).
+For Netflix data, type:
 
-The netflix_mm and netflix_mme files look like
+	cd ./data/netflix/
+	python ./prepare_netflix_data.py 
 
-	% Generated 25-Sep-2011
-	480189 17770 99072112
-	1 1  3
-	2 1  5
-	3 1  4
-	5 1  3
-	6 1  3
-	7 1  4
-	8 1  3
+Note: this can take 30+ minutes. You can download this [file](https://ibm.box.com/s/5vmh77up8reodvihiq0ri66jltg9h4uh) from your brower, extract and put it in ./data/netflix directly.
 
-Please refer to this python [script](https://github.com/wei-tan/CuMF/blob/master/scripts/prepare_input.ipynb) to prepare cuMF input data. 
+For Movielens:
+
+	cd ./data/ml10M/
+	ipython prepare_ml10M_data.py
+
+Note: you will encounter a NaN test RMSE. Please refer to the "Known Issues" Section.
 
 ## Run
 
-For example, to run cuMF with netflix data set:
-Run main, specifying F (rank value), lambda, and how many partitions on solving movie features (this is because netflix data has far more movies than users). Prepare the data as requested in the test-als.cu file. We will make this run script more user-friendly later.
+Type ./main you will see the following instructions:
 
-Note: rank value has to be a multiply of 10, e.g., 10, 50, 100, 200). On K40 here is how we run:
+Usage: give M, N, F, NNZ, NNZ_TEST, lambda, X_BATCH, THETA_BATCH and DATA_DIR.
+E.g., for netflix data set, use:
+	./main 17770 480189 100 99072112 1408395 0.058 1 3 ./data/netflix/
+E.g., for movielens 10M data set, use:
+	./main 71567 65133 100 9000048 1000006 0.05 1 1 ./data/ml10M/
+E.g., for yahooMusic data set, use:
+	./main 1000990 624961 100 252800275 4003960 1.1 6 3 ./data/yahoo/
 
-	./main 100 0.058 3
+Prepare the data as instructed in the previous section, before you run.
+
+Note: rank value F has to be a multiply of 10, e.g., 10, 50, 100, 200). 
 
 ## Known Issues
 We are trying to improve the usability, stability and performance. Here are some known issues we are working on:
 
-(1) More user-friendly data transformation and run scripts.
+(1) NaN test error. This is because in some data sets such as movielens 10M, there are users or items with no ratings in training set but some ratings in test set. To overcome this, we have defined a flag in als.cu (#define SURPASS_NAN). If SURPASS_NAN is defined, we check NaN in calculating RMSE and ignore the NaN values. Normally #define SURPASS_NAN should be commented out, as the additional check slows down the computation.
 
 (2) Multi GPU support. We have tested on very large data sets such as [SparkALS](https://databricks.com/blog/2014/07/23/scalable-collaborative-filtering-with-spark-mllib.html) and HugeWiki, on multiple GPUs on one server. We will make our multi GPU support code available soon.
 

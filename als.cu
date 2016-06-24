@@ -25,6 +25,7 @@
 //do not use magma and fp16 by default  
 //#define CUMF_USE_MAGMA
 //#define CUMF_USE_HALF
+//#define SURPASS_NAN
 #include "als.h"
 #include "host_utilities.h"
 #include <fstream>
@@ -269,12 +270,23 @@ __global__ void RMSE(const float * csrVal, const int* cooRowIndex,
 		int row = cooRowIndex[i];
 		int col = csrColIndex[i];
 		float e = csrVal[i];
-		//if(i%1000000==0) printf("row: %d, col: %d, csrVal[%d]: %f.\t", row, col, i, e);
+		//if(i%1000000==0) printf("row: %d, col: %d, csrVal[%d]: %f.\n", row, col, i, e);
 		for (int k = 0; k < f; k++) {
+			#ifdef SURPASS_NAN
+			//a and b could be; there are user/item in testing but not training set
+			float a = __ldg(&thetaT[f * col + k]);
+			float b = __ldg(&XT[f * row + k]);
+			if(isnan(a)||isnan(b))
+				break;
+			else
+				e -= a * b;
+			//if(isnan(a)) printf("row: %d, col: %d\n", row, col);
+			//if(isnan(b)) printf("b[%d]: %f.\n", i, b);
+			#else
 			e -= __ldg(&thetaT[f * col + k]) * __ldg(&XT[f * row + k]);
+			#endif
 		}
 		atomicAdd(&error[i%error_size], e*e);
-		//error[i] = e*e;
 		//if(i%1000000==0) printf("error[%d]: %f.\n", i, e);
 	}
 }

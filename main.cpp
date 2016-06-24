@@ -1,5 +1,5 @@
 /*
- * als_main.cu
+ * main.cpp
  *
  *  Created on: Feb 10, 2015
  *      Author: Wei Tan (wtan@us.ibm.com)
@@ -9,17 +9,21 @@
  */
 #include "als.h"
 #include "host_utilities.h"
+#include<stdlib.h>
 #include<stdio.h>
+#include <string>
 
 #define DEVICEID 0
 #define ITERS 10
 
+/*
 //netflix standard data
 #define M 17770
 #define N 480189
 #define NNZ 99072112
 #define NNZ_TEST 1408395
 #define X_BATCH 1
+*/
 
 //lambda: K40 and Maxwell: 0.055
 //K80: needs 0.06
@@ -38,30 +42,35 @@
 */
 
 int main(int argc, char **argv) {
-
-	if(argc!=4){
-		printf("usage: give F, lambda and THETA_BATCH.\n");
+	//parse input parameters
+	if(argc != 10){
+		printf("Usage: give M, N, F, NNZ, NNZ_TEST, lambda, X_BATCH, THETA_BATCH and DATA_DIR.\n");
+		printf("E.g., for netflix data set, use: \n");
+		printf("./main 17770 480189 100 99072112 1408395 0.058 1 3 ./data/netflix/ \n");
+		printf("E.g., for movielens 10M data set, use: \n");
+		printf("./main 71567 65133 100 9000048 1000006 0.05 1 1 ./data/ml10M/ \n");
+		printf("E.g., for yahooMusic data set, use: \n");
+		printf("./main 1000990 624961 100 252800275 4003960 1.1 6 3 ./data/yahoo/ \n");
 		return 0;
-
 	}
-	else {
-		printf("F = %s, lambda = %s, THETA_BATCH = %s \n", argv[1], argv[2], argv[3]);
-	}
-	int f = atoi(argv[1]);
+	
+	int f = atoi(argv[3]);
 	if(f%T10!=0){
 		printf("F has to be a multiple of %d \n", T10);
 		return 0;
 	}
-
+	int m = atoi(argv[1]);
+	int n = atoi(argv[2]);
+	long nnz = atoi(argv[4]);
+	long nnz_test = atoi(argv[5]);
+	float lambda = atof(argv[6]);
+	int X_BATCH = atoi(argv[7]);
+	int THETA_BATCH = atoi(argv[8]);
+	std::string DATA_DIR(argv[9]);
+	printf("M = %d, N = %d, F = %d, NNZ = %ld, NNZ_TEST = %ld, lambda = %f\nX_BATCH = %d, THETA_BATCH = %d\nDATA_DIR = %s \n",
+			m, n, f, nnz, nnz_test, lambda, X_BATCH, THETA_BATCH, DATA_DIR.c_str());
+	
 	cudaSetDevice(DEVICEID);
-
-	int m = M;
-	int n = N;
-	long nnz = NNZ;
-	long nnz_test = NNZ_TEST;
-	float lambda = atof(argv[2]);
-	int THETA_BATCH = atoi(argv[3]);
-
 	int* csrRowIndexHostPtr;
 	cudacall(cudaMallocHost( (void** ) &csrRowIndexHostPtr, (m + 1) * sizeof(csrRowIndexHostPtr[0])) );
 	int* csrColIndexHostPtr;
@@ -91,7 +100,7 @@ int main(int argc, char **argv) {
 		thetaTHost[k] = 0.05*((float) rand() / (RAND_MAX)) - 0.35;
 		//yahoo
 		//thetaTHost[k] = 3.0*((float) rand() / (RAND_MAX)) - 1.0f;
-	printf("*******starting loading training and testing sets to host.\n");
+	printf("*******start loading training and testing sets to host.\n");
 	//testing set
 	int* cooRowIndexTestHostPtr = (int *) malloc(
 			nnz_test * sizeof(cooRowIndexTestHostPtr[0]));
@@ -102,23 +111,25 @@ int main(int argc, char **argv) {
 	struct timeval tv0;
 	gettimeofday(&tv0, NULL);
 
-	loadCooSparseMatrixBin("./netflix/R_test_coo.data.bin", "./netflix/R_test_coo.row.bin","./netflix/R_test_coo.col.bin",
-	//loadCooSparseMatrixBin("./yahoo/yahoo_R_test_coo.data.bin", "./yahoo/yahoo_R_test_coo.row.bin", "./yahoo/yahoo_R_test_coo.col.bin",
+	
+	loadCooSparseMatrixBin( (DATA_DIR + "/R_test_coo.data.bin").c_str(), (DATA_DIR + "/R_test_coo.row.bin").c_str(), 
+							(DATA_DIR + "/R_test_coo.col.bin").c_str(),
 			cooValHostTestPtr, cooRowIndexTestHostPtr, cooColIndexTestHostPtr, nnz_test);
 
-    loadCSRSparseMatrixBin("./netflix/R_train_csr.data.bin", "./netflix/R_train_csr.indptr.bin", "./netflix/R_train_csr.indices.bin",
-    //loadCSRSparseMatrixBin("./yahoo/yahoo_R_train_csr.data.bin", "./yahoo/yahoo_R_train_csr.indptr.bin", "./yahoo/yahoo_R_train_csr.indices.bin",
+    loadCSRSparseMatrixBin( (DATA_DIR + "/R_train_csr.data.bin").c_str(), (DATA_DIR + "/R_train_csr.indptr.bin").c_str(),
+							(DATA_DIR + "/R_train_csr.indices.bin").c_str(),
     		csrValHostPtr, csrRowIndexHostPtr, csrColIndexHostPtr, m, nnz);
 
-    loadCSCSparseMatrixBin("./netflix/R_train_csc.data.bin", "./netflix/R_train_csc.indices.bin", "./netflix/R_train_csc.indptr.bin",
-    //loadCSCSparseMatrixBin("./yahoo/yahoo_R_train_csc.data.bin", "./yahoo/yahoo_R_train_csc.indices.bin", "./yahoo/yahoo_R_train_csc.indptr.bin",
+    loadCSCSparseMatrixBin( (DATA_DIR + "/R_train_csc.data.bin").c_str(), (DATA_DIR + "/R_train_csc.indices.bin").c_str(),
+							(DATA_DIR +"/R_train_csc.indptr.bin").c_str(),
    		cscValHostPtr, cscRowIndexHostPtr, cscColIndexHostPtr, n, nnz);
 
-    loadCooSparseMatrixRowPtrBin("./netflix/R_train_coo.row.bin", cooRowIndexHostPtr, nnz);
-    //loadCooSparseMatrixRowPtrBin("./yahoo/yahoo_R_train_coo.row.bin", cooRowIndexHostPtr, nnz);
+    loadCooSparseMatrixRowPtrBin( (DATA_DIR + "/R_train_coo.row.bin").c_str(), cooRowIndexHostPtr, nnz);
+	
+
 
 	#ifdef DEBUG
-    printf("\nloaded csr to host; print data, row and col array\n");
+    printf("\nloaded training csr to host; print data, row and col array\n");
 	for (int i = 0; i < nnz && i < 10; i++) {
 		printf("%.1f ", csrValHostPtr[i]);
 	}
@@ -133,6 +144,21 @@ int main(int argc, char **argv) {
 	}
 	printf("\n");
 	
+	printf("\nloaded testing coo to host; print data, row and col array\n");
+	for (int i = 0; i < nnz && i < 10; i++) {
+		printf("%.1f ", cooValHostTestPtr[i]);
+	}
+	printf("\n");
+
+	for (int i = 0; i < nnz && i < 10; i++) {
+		printf("%d ", cooRowIndexTestHostPtr[i]);
+	}
+	printf("\n");
+	for (int i = 0; i < nnz && i < 10; i++) {
+		printf("%d ", cooColIndexTestHostPtr[i]);
+	}
+	printf("\n");
+	
 	#endif
 	double t0 = seconds();
 	
@@ -142,7 +168,7 @@ int main(int argc, char **argv) {
 			cooRowIndexTestHostPtr, cooColIndexTestHostPtr, cooValHostTestPtr,
 			m, n, f, nnz, nnz_test, lambda,
 			ITERS, X_BATCH, THETA_BATCH, DEVICEID);
-	printf("\ndoALS takes seconds: %.3f for F= %d\n", seconds() - t0, f);
+	printf("\ndoALS takes seconds: %.3f for F = %d\n", seconds() - t0, f);
 
 	/*
 	//write out the model	
@@ -167,4 +193,3 @@ int main(int argc, char **argv) {
 	printf("\nALS Done.\n");
 	return 0;
 }
-

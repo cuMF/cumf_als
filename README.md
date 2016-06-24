@@ -51,7 +51,7 @@ For Netflix data, type:
 	cd ./data/netflix/
 	python ./prepare_netflix_data.py 
 
-Note: this can take 30+ minutes. You can download this [file](https://ibm.box.com/s/5vmh77up8reodvihiq0ri66jltg9h4uh) from your brower, extract and put it in ./data/netflix directly.
+Note: this can take 30+ minutes. You can download this [file](https://ibm.box.com/s/5vmh77up8reodvihiq0ri66jltg9h4uh) from your brower, extract and put the extracted files in ./data/netflix directly.
 
 For Movielens:
 
@@ -65,11 +65,17 @@ Note: you will encounter a NaN test RMSE. Please refer to the "Known Issues" Sec
 Type ./main you will see the following instructions:
 
 Usage: give M, N, F, NNZ, NNZ_TEST, lambda, X_BATCH, THETA_BATCH and DATA_DIR.
+
 E.g., for netflix data set, use:
+
 	./main 17770 480189 100 99072112 1408395 0.058 1 3 ./data/netflix/
+	
 E.g., for movielens 10M data set, use:
+
 	./main 71567 65133 100 9000048 1000006 0.05 1 1 ./data/ml10M/
+	
 E.g., for yahooMusic data set, use:
+
 	./main 1000990 624961 100 252800275 4003960 1.1 6 3 ./data/yahoo/
 
 Prepare the data as instructed in the previous section, before you run.

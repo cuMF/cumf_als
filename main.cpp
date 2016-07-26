@@ -94,12 +94,17 @@ int main(int argc, char **argv) {
 	cudacall(cudaMallocHost( (void** ) &XTHost, m * f * sizeof(XTHost[0])) );
 
 	//initialize thetaT on host
-	srand (time(0));
+	unsigned int seed = 10;
+	srand (seed);
 	for (int k = 0; k < n * f; k++)
 		//netflix standard
 		thetaTHost[k] = 0.05*((float) rand() / (RAND_MAX)) - 0.35;
 		//yahoo
 		//thetaTHost[k] = 3.0*((float) rand() / (RAND_MAX)) - 1.0f;
+	//CG needs to initialize X as well
+	for (int k = 0; k < m * f; k++)
+		//netflix standard
+		XTHost[k] = 0.05*((float) rand() / (RAND_MAX)) - 0.35;
 	printf("*******start loading training and testing sets to host.\n");
 	//testing set
 	int* cooRowIndexTestHostPtr = (int *) malloc(
@@ -170,15 +175,15 @@ int main(int argc, char **argv) {
 			ITERS, X_BATCH, THETA_BATCH, DEVICEID);
 	printf("\ndoALS takes seconds: %.3f for F = %d\n", seconds() - t0, f);
 
-	/*
+	
 	//write out the model	
-	FILE * xfile = fopen("XT.data", "wb");
-	FILE * thetafile = fopen("thetaT.data", "wb");
+	FILE * xfile = fopen("XT-CG.data", "wb");
+	FILE * thetafile = fopen("thetaT-CG.data", "wb");
 	fwrite(XTHost, sizeof(float), m*f, xfile);
 	fwrite(thetaTHost, sizeof(float), n*f, thetafile);
 	fclose(xfile);
 	fclose(thetafile);
-	*/
+	
 
 	cudaFreeHost(csrRowIndexHostPtr);
 	cudaFreeHost(csrColIndexHostPtr);

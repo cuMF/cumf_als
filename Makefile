@@ -154,16 +154,22 @@ debug:	build
 
 als.o:als.cu
 	$(NVCC) $(INCLUDES) $(ALL_CCFLAGS) $(GENCODE_FLAGS) -lineinfo -o $@ -c $<
+cg.o:cg.cu
+	$(NVCC) $(INCLUDES) $(ALL_CCFLAGS) $(GENCODE_FLAGS) -lineinfo -o $@ -c $<
 main.o:main.cpp
 	$(NVCC) $(INCLUDES) $(ALL_CCFLAGS) $(GENCODE_FLAGS) -lineinfo -o $@ -c $<
 host_utilities.o:host_utilities.cpp
 	$(NVCC) $(INCLUDES) $(ALL_CCFLAGS) $(GENCODE_FLAGS) -lineinfo -o $@ -c $<
-main: host_utilities.o als.o main.o
+#test_cg.o:test_cg.cpp
+#	$(NVCC) $(INCLUDES) $(ALL_CCFLAGS) $(GENCODE_FLAGS) -lineinfo -o $@ -c $<
+#main: host_utilities.o cg.o test_cg.o
+#	$(NVCC) $(ALL_LDFLAGS) $(GENCODE_FLAGS) -lineinfo -o $@ $+ $(LIBRARIES)
+main: host_utilities.o cg.o als.o main.o
 	$(NVCC) $(ALL_LDFLAGS) $(GENCODE_FLAGS) -lineinfo -o $@ $+ $(LIBRARIES)
 #netflix
 run: main
 	 ./main 17770 480189 100 99072112 1408395 0.058 1 3 ./data/netflix/
 clean:
-	rm -f host_utilities.o als.o main main.o
+	rm -f host_utilities.o als.o main main.o cg.o
 
 clobber: clean

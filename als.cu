@@ -27,6 +27,7 @@
 //#define CUMF_USE_HALF
 //#define SURPASS_NAN
 #include "als.h"
+#include "cg.h"
 #include "host_utilities.h"
 #include <fstream>
 #include <assert.h>
@@ -682,6 +683,8 @@ float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const 
 	cudacall(cudaMemcpy(cscColIndex, cscColIndexHostPtr,(size_t ) (n+1) * sizeof(cscColIndex[0]), cudaMemcpyHostToDevice));
 	cudacall(cudaMemcpy(cscVal, cscValHostPtr,(size_t ) (nnz * sizeof(cscVal[0])),cudaMemcpyHostToDevice));
 	cudacall(cudaMemcpy(thetaT, thetaTHost, (size_t ) (n * f * sizeof(thetaT[0])), cudaMemcpyHostToDevice));
+	//CG needs XT
+	cudacall(cudaMemcpy(XT, XTHost, (size_t ) (m * f * sizeof(XT[0])), cudaMemcpyHostToDevice));
 
 	cudacall(cudaDeviceSetCacheConfig(cudaFuncCachePreferShared));
 	//64-bit smem access
@@ -706,6 +709,7 @@ float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const 
 	struct timeval start_tv2;
 	#endif
 
+	printf("*******start iterations...\n");
 	for(int iter = 0; iter < ITERS ; iter ++){
 		#ifdef DEBUG
 		printf("---------------------------ALS iteration %d, update X.----------------------------------\n", iter);
@@ -798,8 +802,10 @@ float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const 
 			#ifdef DEBUG
 			printf("\tinvoke updateX with batch_size: %d, batch_offset: %d..\n", batch_size, batch_offset);
 			#endif
-			updateX(batch_size, batch_offset, ythetaT, tt, XT, handle, m, n, f, nnz,
-					devPtrTTHost, devPtrYthetaTHost);
+			
+			//updateXWithCG(1, batch_offset, ythetaT, tt, XT, handle, m, n, f, nnz);
+			updateXWithCGHost(tt, &XT[batch_offset], &ythetaT[batch_offset], batch_size, f, 10);
+			//updateX(batch_size, batch_offset, ythetaT, tt, XT, handle, m, n, f, nnz, devPtrTTHost, devPtrYthetaTHost);
 			#ifdef DEBUG
 			printf("\tupdateX run seconds: %f \n", seconds() - t0);
 			#endif

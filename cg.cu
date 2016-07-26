@@ -149,7 +149,7 @@ __global__ void updateXWithCGKernel(float * A, float * x, float * b, const int b
 	float temp = 0;
 	for(int i = 0; i < f; i++)
 		//this is math correct and coalesced because A is symmetric
-		temp += A[blockIdx.x*f*f + f*i + threadIdx.x]*x[blockIdx.x*f + i];
+		temp += A[blockIdx.x*f*f + f*i + threadIdx.x]*sharedx[i];
 	r[blockIdx.x*blockDim.x + threadIdx.x] = b[blockIdx.x*blockDim.x + threadIdx.x] - temp;
 	//p=r;
 	p[blockIdx.x*blockDim.x + threadIdx.x] = r[blockIdx.x*blockDim.x + threadIdx.x];
@@ -172,13 +172,14 @@ __global__ void updateXWithCGKernel(float * A, float * x, float * b, const int b
 
 	for(int iter = 0; iter < cgIter; iter++){
 		//ap=A*p;
+		//sharedx <-- p
 		sharedx[threadIdx.x] = p[blockIdx.x*blockDim.x + threadIdx.x];
 		__syncthreads();
 		//WARN: set temp to zero since the next operation is +=!
 		temp = 0;
 		for(int i = 0; i < f; i++)
 			//this is math correct and coalesced because A is symmetric
-			temp += A[blockIdx.x*f*f + f*i + threadIdx.x]*p[blockIdx.x*f + i];
+			temp += A[blockIdx.x*f*f + f*i + threadIdx.x]*sharedx[i];
 		ap[blockIdx.x*blockDim.x + threadIdx.x] = temp;
 		__syncthreads();
 		#ifdef DEBUG
@@ -190,7 +191,7 @@ __global__ void updateXWithCGKernel(float * A, float * x, float * b, const int b
 		}
 		#endif
 		//pAp=p'*Ap
-		temp = p[blockIdx.x*blockDim.x + threadIdx.x]
+		temp = sharedx[threadIdx.x]
 				*ap[blockIdx.x*blockDim.x + threadIdx.x];
 		temp = blockReduceSum(temp);
 		if(threadIdx.x == 0){
@@ -210,7 +211,7 @@ __global__ void updateXWithCGKernel(float * A, float * x, float * b, const int b
 		#endif
 		//x=x+alpha*p;
 		x[blockIdx.x*blockDim.x + threadIdx.x] = 
-			x[blockIdx.x*blockDim.x + threadIdx.x] + alpha[blockIdx.x] * p[blockIdx.x*blockDim.x + threadIdx.x];
+			x[blockIdx.x*blockDim.x + threadIdx.x] + alpha[blockIdx.x] * sharedx[threadIdx.x];
         //r=r-alpha*Ap;
 		r[blockIdx.x*blockDim.x + threadIdx.x] = 
 			r[blockIdx.x*blockDim.x + threadIdx.x] - alpha[blockIdx.x] * ap[blockIdx.x*blockDim.x + threadIdx.x];
@@ -240,7 +241,7 @@ __global__ void updateXWithCGKernel(float * A, float * x, float * b, const int b
 		}
 		//p=r+(rsnew/rsold)*p;
 		p[blockIdx.x*blockDim.x + threadIdx.x] = 
-			r[blockIdx.x*blockDim.x + threadIdx.x] + beta[blockIdx.x] * p[blockIdx.x*blockDim.x + threadIdx.x];
+			r[blockIdx.x*blockDim.x + threadIdx.x] + beta[blockIdx.x] * sharedx[threadIdx.x];
 		//__syncthreads();
 	}
 }

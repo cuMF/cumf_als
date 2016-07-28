@@ -804,7 +804,7 @@ float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const 
 			#endif
 			
 			//updateXWithCG(1, batch_offset, ythetaT, tt, XT, handle, m, n, f, nnz);
-			updateXWithCGHost(tt, &XT[batch_offset], &ythetaT[batch_offset], batch_size, f, 10);
+			updateXWithCGHost(tt, &XT[batch_offset], &ythetaT[batch_offset], batch_size, f, 8);
 			//updateX(batch_size, batch_offset, ythetaT, tt, XT, handle, m, n, f, nnz, devPtrTTHost, devPtrYthetaTHost);
 			#ifdef DEBUG
 			printf("\tupdateX run seconds: %f \n", seconds() - t0);

@@ -72,7 +72,7 @@ void blockReduceSumWithAtomics(float *out,float val) {
 	__syncthreads();    
 	if (lane==0){
 		#ifdef DEBUG
-		printf("--------------atomicAdd of %f in thread %d. \n", val,threadIdx.x);
+		//printf("--------------atomicAdd of %f in thread %d. \n", val,threadIdx.x);
 		#endif
 		atomicAdd(out, val);
 	}
@@ -139,6 +139,7 @@ __global__ void updateXWithCGKernel(float * A, float * x, float * b, const int b
 		#ifdef DEBUG
 		__syncthreads();
 		if(threadIdx.x==0){
+			printf("----------CG iteration %d \n", iter);
 			printf("***ap:\n");
 			for(int i = 0; i < f; i++)
 				printf("%f ", sharedap[i]);
@@ -165,6 +166,7 @@ __global__ void updateXWithCGKernel(float * A, float * x, float * b, const int b
 				*sharedap[threadIdx.x];		
 		//temp = blockReduceSum(shared, temp);
 		blockReduceSumWithAtomics(rsnew, temp);
+		//sync needed, to let all atomicAdd threads completes
 		__syncthreads();
 		if(threadIdx.x == 0){
 			//pAp = temp;
@@ -180,6 +182,7 @@ __global__ void updateXWithCGKernel(float * A, float * x, float * b, const int b
 			#endif
 			rsnew[0] = 0;
 		}
+		//needed, aplpha[0] to be used by all threads
 		__syncthreads();
 		//x=x+alpha*p;
 		x[blockIdx.x*blockDim.x + threadIdx.x] = 
@@ -187,9 +190,11 @@ __global__ void updateXWithCGKernel(float * A, float * x, float * b, const int b
         //r=r-alpha*Ap;
 		sharedr[threadIdx.x] = 
 			sharedr[threadIdx.x] - alpha[0] * sharedap[threadIdx.x];
+		//NOT needed?
+		//__syncthreads();
 		#ifdef DEBUG
+		__syncthreads();
 		if(threadIdx.x==0){
-			__syncthreads();
 			printf("***shared memory content before 3rd blockReduceSum:\n");
 			for(int i = 0; i < 100; i++)
 				printf("%f ", sharedp[i]);
@@ -214,6 +219,7 @@ __global__ void updateXWithCGKernel(float * A, float * x, float * b, const int b
 		*/
 		temp = sharedr[threadIdx.x]*sharedr[threadIdx.x];
 		blockReduceSumWithAtomics(rsnew, temp);
+		//WARN: has to have this sync!
 		__syncthreads();
 
 		#ifdef DEBUG
@@ -234,19 +240,23 @@ __global__ void updateXWithCGKernel(float * A, float * x, float * b, const int b
 		#endif
 		if(rsnew[0]<1e-4)
 			break;
+		//NOT needed?
+		//__syncthreads();
 		//beta
 		if(threadIdx.x == 0){
 			beta[0] = rsnew[0]/rsold[0];
 			//rsold=rsnew;
 			rsold[0] = rsnew[0];
 		}
-		//WARN: need sync since every thread needs beta[0]
+		//need sync since every thread needs beta[0]
 		__syncthreads();
 		//p=r+(rsnew/rsold)*p;
 		sharedp[threadIdx.x] = 
 			sharedr[threadIdx.x] + beta[0] * sharedp[threadIdx.x];
+		//need sync as every thread needs sharedp at the beginning of for
 		__syncthreads();
 		#ifdef DEBUG
+		__syncthreads();
 		if(threadIdx.x==0){
 			printf("***shared memory content after update p:\n");
 			for(int i = 0; i < 100; i++)
@@ -259,6 +269,7 @@ __global__ void updateXWithCGKernel(float * A, float * x, float * b, const int b
 				printf("%f ", sharedap[i]);
 			printf("\n");
 		}
+		__syncthreads();
 		#endif
 	}
 }

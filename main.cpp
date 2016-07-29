@@ -175,7 +175,7 @@ int main(int argc, char **argv) {
 			ITERS, X_BATCH, THETA_BATCH, DEVICEID);
 	printf("\ndoALS takes seconds: %.3f for F = %d\n", seconds() - t0, f);
 
-	
+	/*
 	//write out the model	
 	FILE * xfile = fopen("XT-CG.data", "wb");
 	FILE * thetafile = fopen("thetaT-CG.data", "wb");
@@ -183,6 +183,7 @@ int main(int argc, char **argv) {
 	fwrite(thetaTHost, sizeof(float), n*f, thetafile);
 	fclose(xfile);
 	fclose(thetafile);
+	*/
 	
 
 	cudaFreeHost(csrRowIndexHostPtr);

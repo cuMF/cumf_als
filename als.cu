@@ -804,7 +804,7 @@ float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const 
 			#endif
 			
 			//updateXWithCG(1, batch_offset, ythetaT, tt, XT, handle, m, n, f, nnz);
-			updateXWithCGHost(tt, &XT[batch_offset], &ythetaT[batch_offset], batch_size, f, 6);
+			updateXWithCGHost(tt, &XT[batch_offset*f], &ythetaT[batch_offset*f], batch_size, f, 6);
 			//updateX(batch_size, batch_offset, ythetaT, tt, XT, handle, m, n, f, nnz, devPtrTTHost, devPtrYthetaTHost);
 			#ifdef DEBUG
 			printf("\tupdateX run seconds: %f \n", seconds() - t0);
@@ -822,7 +822,7 @@ float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const 
 		cudacall(cudaFree(csrRowIndex));
 		cudacall(cudaFree(csrColIndex));
 		cudacall(cudaFree(ythetaT));
-		
+		///*
 		#ifdef DEBUG
 		gettimeofday(&start_tv, NULL);
 		printf("---------------------------------- ALS iteration %d, update theta ----------------------------------\n", iter);
@@ -903,8 +903,10 @@ float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const 
 			#ifdef DEBUG
 			printf("*******invoke updateTheta with batch_size: %d, batch_offset: %d.\n", batch_size, batch_offset);
 			#endif
-			updateTheta(batch_size, batch_offset, xx, yTXT, thetaT, handle, m,  n,  f,  nnz,
-					devPtrXXHost, devPtrYTXTHost);
+			updateXWithCGHost(xx, &thetaT[batch_offset*f], &yTXT[batch_offset*f], batch_size, f, 6);
+
+			//updateTheta(batch_size, batch_offset, xx, yTXT, thetaT, handle, m,  n,  f,  nnz,
+			//		devPtrXXHost, devPtrYTXTHost);
 			#ifdef DEBUG
 			printf("\tupdateTheta run seconds: %f \n", seconds() - t0);
 			#endif
@@ -975,7 +977,7 @@ float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const 
 		final_rmse = sqrt((*rmse_test)/nnz_test);
 		printf("--------- Test RMSE in iter %d: %f\n", iter, final_rmse);
 		cudacall(cudaFree(errors_test));
-		
+//*/		
 	}
 	//copy feature vectors back to host
 	cudacall(cudaMemcpy(thetaTHost, thetaT, (size_t ) (n * f * sizeof(thetaT[0])), cudaMemcpyDeviceToHost));

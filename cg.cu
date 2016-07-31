@@ -82,15 +82,15 @@ void blockReduceSumWithAtomics(float *out,float val) {
 //fused kernel
 //each block solves a A*x=b 
 __global__ void updateXWithCGKernel(float * A, float * x, float * b, const int batchSize, const int f, const float cgIter){
-	__shared__ float smem[404];
+	extern __shared__ float smem[];
 	float *sharedx = &smem[0];
-	float *sharedp = &smem[100];
-	float *sharedr = &smem[200];
-	float *sharedap = &smem[300];
-	float *rsold = &smem[400]; 
-	float *alpha = &smem[401];
-	float *rsnew = &smem[402];
-	float *beta = &smem[403];
+	float *sharedp = &smem[f];
+	float *sharedr = &smem[2*f];
+	float *sharedap = &smem[3*f];
+	float *rsold = &smem[4*f]; 
+	float *alpha = &smem[4*f+1];
+	float *rsnew = &smem[4*f+2];
+	float *beta = &smem[4*f+3];
 
 	//sharedx<--x
 	sharedx[threadIdx.x] = x[blockIdx.x*blockDim.x + threadIdx.x];
@@ -117,13 +117,13 @@ __global__ void updateXWithCGKernel(float * A, float * x, float * b, const int b
 		printf("***rsold:\n");
 		printf("rsold = %f \n", rsold[0]);
 		printf("***shared memory content after 1st blockReduceSum:\n");
-		for(int i = 0; i < 100; i++)
+		for(int i = 0; i < f; i++)
 			printf("%f ", sharedp[i]);
 		printf("\n");
-		for(int i = 0; i < 100; i++)
+		for(int i = 0; i < f; i++)
 			printf("%f ", sharedr[i]);
 		printf("\n");
-		for(int i = 0; i < 100; i++)
+		for(int i = 0; i < f; i++)
 			printf("%f ", sharedap[i]);
 		printf("\n");
 	}
@@ -146,13 +146,13 @@ __global__ void updateXWithCGKernel(float * A, float * x, float * b, const int b
 				printf("%f ", sharedap[i]);
 			printf("\n");
 			printf("***shared memory content before 2rd blockReduceSum:\n");
-			for(int i = 0; i < 100; i++)
+			for(int i = 0; i < f; i++)
 				printf("%f ", sharedp[i]);
 			printf("\n");
-			for(int i = 0; i < 100; i++)
+			for(int i = 0; i < f; i++)
 				printf("%f ", sharedr[i]);
 			printf("\n");
-			for(int i = 0; i < 100; i++)
+			for(int i = 0; i < f; i++)
 				printf("%f ", sharedap[i]);
 			printf("\n");
 		}
@@ -197,13 +197,13 @@ __global__ void updateXWithCGKernel(float * A, float * x, float * b, const int b
 		__syncthreads();
 		if(threadIdx.x==0){
 			printf("***shared memory content before 3rd blockReduceSum:\n");
-			for(int i = 0; i < 100; i++)
+			for(int i = 0; i < f; i++)
 				printf("%f ", sharedp[i]);
 			printf("\n");
-			for(int i = 0; i < 100; i++)
+			for(int i = 0; i < f; i++)
 				printf("%f ", sharedr[i]);
 			printf("\n");
-			for(int i = 0; i < 100; i++)
+			for(int i = 0; i < f; i++)
 				printf("%f ", sharedap[i]);
 			printf("\n");
 		}
@@ -228,13 +228,13 @@ __global__ void updateXWithCGKernel(float * A, float * x, float * b, const int b
 			printf("***rsnew:\n");
 			printf("rsnew = %f \n", rsnew[0]);
 			printf("***shared memory content after 3rd blockReduceSum:\n");
-			for(int i = 0; i < 100; i++)
+			for(int i = 0; i < f; i++)
 				printf("%f ", sharedp[i]);
 			printf("\n");
-			for(int i = 0; i < 100; i++)
+			for(int i = 0; i < f; i++)
 				printf("%f ", sharedr[i]);
 			printf("\n");
-			for(int i = 0; i < 100; i++)
+			for(int i = 0; i < f; i++)
 				printf("%f ", sharedap[i]);
 			printf("\n");
 		}
@@ -260,13 +260,13 @@ __global__ void updateXWithCGKernel(float * A, float * x, float * b, const int b
 		__syncthreads();
 		if(threadIdx.x==0){
 			printf("***shared memory content after update p:\n");
-			for(int i = 0; i < 100; i++)
+			for(int i = 0; i < f; i++)
 				printf("%f ", sharedp[i]);
 			printf("\n");
-			for(int i = 0; i < 100; i++)
+			for(int i = 0; i < f; i++)
 				printf("%f ", sharedr[i]);
 			printf("\n");
-			for(int i = 0; i < 100; i++)
+			for(int i = 0; i < f; i++)
 				printf("%f ", sharedap[i]);
 			printf("\n");
 		}
@@ -279,7 +279,7 @@ __global__ void updateXWithCGKernel(float * A, float * x, float * b, const int b
 
 
 void updateXWithCGHost(float * A, float * x, float * b, const int batchSize, const int f, const float cgIter){
-	updateXWithCGKernel<<<batchSize, f>>>
+	updateXWithCGKernel<<<batchSize, f, (4*f+4)*sizeof(float)>>>
 		(A, x, b, batchSize, f, cgIter);
 	cudaDeviceSynchronize();
 	cudaCheckError();

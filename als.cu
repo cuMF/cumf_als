@@ -822,7 +822,7 @@ float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const 
 		cudacall(cudaFree(csrRowIndex));
 		cudacall(cudaFree(csrColIndex));
 		cudacall(cudaFree(ythetaT));
-		///*
+///*
 		#ifdef DEBUG
 		gettimeofday(&start_tv, NULL);
 		printf("---------------------------------- ALS iteration %d, update theta ----------------------------------\n", iter);

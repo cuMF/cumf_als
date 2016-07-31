@@ -27,6 +27,7 @@
 #include "host_utilities.h"
 #include <fstream>
 
+#undef DEBUG
 #define WARP_SIZE 32
 
 //WARP shuffling code adopted from here:
@@ -185,8 +186,8 @@ __global__ void updateXWithCGKernel(float * A, float * x, float * b, const int b
 		//needed, aplpha[0] to be used by all threads
 		__syncthreads();
 		//x=x+alpha*p;
-		x[blockIdx.x*blockDim.x + threadIdx.x] = 
-			x[blockIdx.x*blockDim.x + threadIdx.x] + alpha[0] * sharedp[threadIdx.x];
+		sharedx[threadIdx.x] = 
+			sharedx[threadIdx.x] + alpha[0] * sharedp[threadIdx.x];
         //r=r-alpha*Ap;
 		sharedr[threadIdx.x] = 
 			sharedr[threadIdx.x] - alpha[0] * sharedap[threadIdx.x];
@@ -271,7 +272,9 @@ __global__ void updateXWithCGKernel(float * A, float * x, float * b, const int b
 		}
 		__syncthreads();
 		#endif
-	}
+	}//end of CG iterations
+	//x<--sharedx
+	x[blockIdx.x*blockDim.x + threadIdx.x] = sharedx[threadIdx.x];
 }
 
 

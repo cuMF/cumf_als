@@ -142,7 +142,7 @@
 	}\
 	while (0)\
 
-#define fill_lower_half_from_registers()\
+#define fill_upper_half_from_registers()\
 do{\
 	tt[index + tile_x + tile_y*F] = temp0;\
 	tt[index + tile_x + (tile_y + 1)*F] = temp1;\
@@ -256,7 +256,7 @@ do{\
 }\
 while(0)
 	
-#define fill_upper_half_from_registers()\
+#define fill_lower_half_from_registers()\
 do{\
 	tt[index + tile_y + 0+ (tile_x + 0)*F]= temp0;\
 	tt[index + tile_y + 1+ (tile_x + 0)*F]= temp1;\

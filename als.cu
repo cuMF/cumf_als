@@ -32,7 +32,8 @@
 #include "host_utilities.h"
 #include <fstream>
 #include <assert.h>
-#include <cuda_fp16.h> 
+#include <cuda_fp16.h>
+#define USE_CG 
 #ifdef CUMF_USE_HALF
 #define SCAN_BATCH 24
 #else
@@ -531,7 +532,10 @@ get_hermitian100(const int batch_offset, float* tt,
 		}
 		//end of iteration in copying from smem and aggregating in register
 		__syncthreads();
-
+		#ifdef DEBUG
+		//if(threadIdx.x==0)
+		//	printf("***temp 0~9: %f %f %f %f %f %f %f %f %f %f\n", temp0, temp1, temp2, temp3, temp4, temp5, temp6, temp7, temp8, temp9);
+		#endif
 		if(threadIdx.x < 55 ){
 			//copy output to gmem
 			int index = blockIdx.x*F*F;
@@ -639,285 +643,6 @@ get_hermitianT10(const int batch_offset, float* tt,
 }
 
 
-//fused kernel, use thetaT to update XT
-__global__ void
-__launch_bounds__(100)
-alsUpdateFeature100(const int batch_offset,
-		const int* csrRowIndex, const int* csrColIndex, const float lambda, const int m, const int F,
-		const float* __restrict__ thetaT, float* XT, float* ythetaT, int cgIter) {
-	extern __shared__ float2 thetaTemp[];
-	int row = blockIdx.x + batch_offset;
-	
-	float temp0= 0, temp1= 0, temp2= 0, temp3= 0, temp4= 0, temp5= 0, temp6= 0, temp7= 0, temp8= 0, temp9 = 0;
-	float temp10= 0, temp11= 0, temp12= 0, temp13= 0, temp14= 0, temp15= 0, temp16= 0, temp17= 0, temp18= 0, temp19 = 0;
-	float temp20= 0, temp21= 0, temp22= 0, temp23= 0, temp24= 0, temp25= 0, temp26= 0, temp27= 0, temp28= 0, temp29 = 0;
-	float temp30= 0, temp31= 0, temp32= 0, temp33= 0, temp34= 0, temp35= 0, temp36= 0, temp37= 0, temp38= 0, temp39 = 0;
-	float temp40= 0, temp41= 0, temp42= 0, temp43= 0, temp44= 0, temp45= 0, temp46= 0, temp47= 0, temp48= 0, temp49 = 0;
-	float temp50= 0, temp51= 0, temp52= 0, temp53= 0, temp54= 0, temp55= 0, temp56= 0, temp57= 0, temp58= 0, temp59 = 0;
-	float temp60= 0, temp61= 0, temp62= 0, temp63= 0, temp64= 0, temp65= 0, temp66= 0, temp67= 0, temp68= 0, temp69 = 0;
-	float temp70= 0, temp71= 0, temp72= 0, temp73= 0, temp74= 0, temp75= 0, temp76= 0, temp77= 0, temp78= 0, temp79 = 0;
-	float temp80= 0, temp81= 0, temp82= 0, temp83= 0, temp84= 0, temp85= 0, temp86= 0, temp87= 0, temp88= 0, temp89 = 0;
-	float temp90= 0, temp91= 0, temp92= 0, temp93= 0, temp94= 0, temp95= 0, temp96= 0, temp97= 0, temp98= 0, temp99 = 0;
-	int tile_x = 0;
-	int tile_y = 0;
-	int start;
-	int end;
-	//get_hermitian100 phase
-	if (threadIdx.x < 64) {
-		//this block needs to handle end - start thetaT columns
-		start = csrRowIndex[row];
-		end = csrRowIndex[row + 1];
-		//slide through [start, end] by window size SCAN_BATCH
-		int iterations = (end - start - 1)/SCAN_BATCH + 1;
-
-		int tile = F/10;
-		for ( int i = 0; i < 10; i++){
-			int end = ((20-i)*(i+1))/2;
-			if(threadIdx.x < end){
-				tile_x = i * tile;
-				tile_y = (10 + threadIdx.x - end) * tile;
-				break;
-			}
-		}
-		//iteration: copy gmem-->smem; aggregate smem-->register
-		for (int iter = 0; iter < iterations; iter ++){
-			float2 theta;
-			if(threadIdx.x < 2*32 ){
-				//int index = threadIdx.x;
-				int index = threadIdx.x - (threadIdx.x/32)*32;	//0 to 31;
-				if(index < SCAN_BATCH){
-					if(iter*SCAN_BATCH + index < end - start){
-						//for (int k = 50*(threadIdx.x/32); k < 50*(threadIdx.x/32) + 50; k += 2){
-						//IMPORTANT: for loop has constant and identical start and end
-						if(threadIdx.x < 32){
-							for (int k = 0; k < 50; k += 2){
-								theta.x = __ldg(&thetaT[ F * csrColIndex[start + iter*SCAN_BATCH + index] + k]);
-								theta.y = __ldg(&thetaT[ F * csrColIndex[start + iter*SCAN_BATCH + index] + k+1]);
-								thetaTemp[index * F/2 + k/2] = theta;
-							}
-						}
-						else {
-							for (int k = 0; k < 50; k += 2){
-								theta.x = __ldg(&thetaT[ F * csrColIndex[start + iter*SCAN_BATCH + index] + k + 50]);
-								theta.y = __ldg(&thetaT[ F * csrColIndex[start + iter*SCAN_BATCH + index] + k + 51]);
-								thetaTemp[index * F/2 + k/2 + 25] = theta;
-							}
-						}
-					}
-					//must be the last iteration; no need to check
-					//not enough theta to copy, set zero
-					else
-						memset(&thetaTemp[index*F/2], 0, F*sizeof(float));
-				}
-			}
-			__syncthreads();
-
-			//tile: 10*10
-			if(threadIdx.x < 55 ){
-				for(int k = 0; k < SCAN_BATCH; k++){
-					accumulate_in_registers();
-				}
-			}
-		}//end of iteration in copying from smem and aggregating in register
-	}
-	__syncthreads();
-	//newly added CG phase, only uses 55 threads for A*p and A*x
-	
-	//reuse the abundant shared memory
-	float *sharedx = (float*)&thetaTemp[0];
-	float *sharedp = (float*)&thetaTemp[50];
-	float *sharedr = (float*)&thetaTemp[100];
-	float *sharedap = (float*)&thetaTemp[150];
-	float *sharedax = (float*)&thetaTemp[200];
-	
-	float *rsold = (float*)&thetaTemp[250]; 
-	float *alpha = (float*)&thetaTemp[251];
-	float *rsnew = (float*)&thetaTemp[252];
-	float *beta = (float*)&thetaTemp[253];
-	
-	//sharedx<--x
-	//loadFromGlobalToShare(sharedx, XT, 100);
-	sharedx[threadIdx.x] = XT[blockIdx.x*F + threadIdx.x];
-	sharedax[threadIdx.x] = 0;
-	__syncthreads();
-	float temp = 0;
-	if(threadIdx.x < 55){
-		//add regularization
-		if(tile_x!=tile_y){
-			temp = (end - start) * lambda;
-			temp0 += temp;
-			//...
-			temp99 += temp;
-		}
-		//r=b-A*x;
-		atomicAdd(&sharedax[tile_y], temp0*sharedx[tile_x] + temp1*sharedx[tile_x + 1] + temp2*sharedx[tile_x + 2] + temp3*sharedx[tile_x + 3] +
-				temp4*sharedx[tile_x + 4] + temp5*sharedx[tile_x + 5] + temp6*sharedx[tile_x + 6] + temp7*sharedx[tile_x + 7] +
-				temp8*sharedx[tile_x + 8] + temp9*sharedx[tile_x + 9]);
-		//...
-		atomicAdd(&sharedax[tile_y + 9], temp90*sharedx[tile_x] + temp91*sharedx[tile_x + 1] + temp92*sharedx[tile_x + 2] + temp93*sharedx[tile_x + 3] +
-			temp94*sharedx[tile_x + 4] + temp95*sharedx[tile_x + 5] + temp96*sharedx[tile_x + 6] + temp97*sharedx[tile_x + 7] +
-			temp98*sharedx[tile_x + 8] + temp99*sharedx[tile_x + 9]);
-		
-		if(tile_x!=tile_y){
-			atomicAdd(&sharedax[tile_x], temp0*sharedx[tile_y] + temp10*sharedx[tile_y + 1] + temp20*sharedx[tile_y + 2] + temp30*sharedx[tile_y + 3] +
-				temp40*sharedx[tile_y + 4] + temp50*sharedx[tile_y + 5] + temp60*sharedx[tile_y + 6] + temp70*sharedx[tile_y + 7] +
-				temp80*sharedx[tile_y + 8] + temp90*sharedx[tile_y + 9]);
-		//...
-			atomicAdd(&sharedax[tile_x + 9], temp9*sharedx[tile_y] + temp19*sharedx[tile_y + 1] + temp29*sharedx[tile_y + 2] + temp39*sharedx[tile_y + 3]+ 
-				temp49*sharedx[tile_y + 4] + temp59*sharedx[tile_y + 5] + temp69*sharedx[tile_y + 6] + temp79*sharedx[tile_y + 7] +
-				temp89*sharedx[tile_y + 8] + temp99*sharedx[tile_y + 9]);
-		}
-	}
-	__syncthreads();
-	//threads 0~99
-	sharedr[threadIdx.x] = ythetaT[blockIdx.x*blockDim.x + threadIdx.x] - sharedax[threadIdx.x];
-	//p=r;
-	sharedp[threadIdx.x] = sharedr[threadIdx.x];
-	//rsold=r'*r;
-	if(threadIdx.x == 0){
-		rsold[0] = 0;
-	}
-	temp = sharedr[threadIdx.x]*sharedr[threadIdx.x];
-	blockReduceSumWithAtomics(rsold, temp);	
-	//temp = blockReduceSum(shared, temp);
-	__syncthreads();
-	//CG iterations
-	for(int iter = 0; iter < cgIter; iter++){
-		//TODO ap=A*p with only 55 threads
-		if(threadIdx.x < 55){
-		}
-		__syncthreads();
-		#ifdef DEBUG
-		__syncthreads();
-		if(threadIdx.x==0){
-			printf("----------CG iteration %d \n", iter);
-			printf("***ap:\n");
-			for(int i = 0; i < F; i++)
-				printf("%f ", sharedap[i]);
-			printf("\n");
-			printf("***shared memory content before 2rd blockReduceSum:\n");
-			for(int i = 0; i < 100; i++)
-				printf("%f ", sharedp[i]);
-			printf("\n");
-			for(int i = 0; i < 100; i++)
-				printf("%f ", sharedr[i]);
-			printf("\n");
-			for(int i = 0; i < 100; i++)
-				printf("%f ", sharedap[i]);
-			printf("\n");
-		}
-		#endif
-		if(threadIdx.x == 0){
-			rsnew[0] = 0;
-		}
-		//no need to have sync before blockReduce
-		//because there is a __syncthreads() in blockReduce
-		//pAp=p'*Ap
-		temp = sharedp[threadIdx.x]*sharedap[threadIdx.x];		
-		//temp = blockReduceSum(shared, temp);
-		blockReduceSumWithAtomics(rsnew, temp);
-		//sync needed, to let all atomicAdd threads completes
-		__syncthreads();
-		if(threadIdx.x == 0){
-			//pAp = temp;
-			//alpha=rsold/(p'*Ap); use rsnew to store pAp
-			alpha[0] = rsold[0]/rsnew[0];
-			#ifdef DEBUG
-			printf("***rsold:\n");
-			printf("rsold = %f \n", rsold[0]);
-			printf("***pAp:\n");
-			printf("pAp = %f \n", rsnew[0]);
-			printf("***alpha:\n");
-			printf("alpha = %f \n", alpha[0]);
-			#endif
-			rsnew[0] = 0;
-		}
-		//needed, aplpha[0] to be used by all threads
-		__syncthreads();
-		//x=x+alpha*p;
-		sharedx[threadIdx.x] = 
-			sharedx[threadIdx.x] + alpha[0] * sharedp[threadIdx.x];
-		//r=r-alpha*Ap;
-		sharedr[threadIdx.x] = 
-			sharedr[threadIdx.x] - alpha[0] * sharedap[threadIdx.x];
-		//NOT needed?
-		//__syncthreads();
-		#ifdef DEBUG
-		__syncthreads();
-		if(threadIdx.x==0){
-			printf("***shared memory content before 3rd blockReduceSum:\n");
-			for(int i = 0; i < 100; i++)
-				printf("%f ", sharedp[i]);
-			printf("\n");
-			for(int i = 0; i < 100; i++)
-				printf("%f ", sharedr[i]);
-			printf("\n");
-			for(int i = 0; i < 100; i++)
-				printf("%f ", sharedap[i]);
-			printf("\n");
-		}
-		#endif
-		
-		temp = sharedr[threadIdx.x]*sharedr[threadIdx.x];
-		blockReduceSumWithAtomics(rsnew, temp);
-		//WARN: has to have this sync!
-		__syncthreads();
-		#ifdef DEBUG
-		if(threadIdx.x==0){
-			printf("***rsnew:\n");
-			printf("rsnew = %f \n", rsnew[0]);
-			printf("***shared memory content after 3rd blockReduceSum:\n");
-			for(int i = 0; i < 100; i++)
-				printf("%f ", sharedp[i]);
-			printf("\n");
-			for(int i = 0; i < 100; i++)
-				printf("%f ", sharedr[i]);
-			printf("\n");
-			for(int i = 0; i < 100; i++)
-				printf("%f ", sharedap[i]);
-			printf("\n");
-		}
-		#endif
-		if(rsnew[0]<1e-4)
-			break;
-		//NOT needed?
-		//__syncthreads();
-		//beta
-		if(threadIdx.x == 0){
-			beta[0] = rsnew[0]/rsold[0];
-			//rsold=rsnew;
-			rsold[0] = rsnew[0];
-		}
-		//need sync since every thread needs beta[0]
-		__syncthreads();
-		//p=r+(rsnew/rsold)*p;
-		sharedp[threadIdx.x] = 
-			sharedr[threadIdx.x] + beta[0] * sharedp[threadIdx.x];
-		//need sync as every thread needs sharedp at the beginning of for
-		__syncthreads();
-		#ifdef DEBUG
-		__syncthreads();
-		if(threadIdx.x==0){
-			printf("***shared memory content after update p:\n");
-			for(int i = 0; i < 100; i++)
-				printf("%f ", sharedp[i]);
-			printf("\n");
-			for(int i = 0; i < 100; i++)
-				printf("%f ", sharedr[i]);
-			printf("\n");
-			for(int i = 0; i < 100; i++)
-				printf("%f ", sharedap[i]);
-			printf("\n");
-		}
-		__syncthreads();
-		#endif
-	}//end of CG iterations	
-	//x<--sharedx
-	XT[blockIdx.x*blockDim.x + threadIdx.x] = sharedx[threadIdx.x];
-
-}
-
-
 float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const float* csrValHostPtr,
 		const int* cscRowIndexHostPtr, const int* cscColIndexHostPtr, const float* cscValHostPtr,
 		const int* cooRowIndexHostPtr, float* thetaTHost, float* XTHost,
@@ -942,7 +667,7 @@ float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const 
 	float * cooVal_test;
 	int * cooRowIndex_test;
 	int * cooColIndex_test;
-	float final_rmse;
+	float final_rmse = 0;
 	printf("*******start allocating memory on GPU...\n");
 	cudacall(cudaMalloc((void** ) &cscRowIndex,nnz * sizeof(cscRowIndex[0])));
 	cudacall(cudaMalloc((void** ) &cscColIndex, (n+1) * sizeof(cscColIndex[0])));
@@ -978,17 +703,16 @@ float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const 
 	using namespace std;
 	#ifdef DEBUG
 	//variable used to time
-	double elapsed = 0.0;
-	struct timeval tv;
-	struct timeval start_tv;
-	struct timeval start_tv2;
+	double t0 = 0;
+	double t1 = 0;
 	#endif
 
 	printf("*******start iterations...\n");
 	for(int iter = 0; iter < ITERS ; iter ++){
 		#ifdef DEBUG
 		printf("---------------------------ALS iteration %d, update X.----------------------------------\n", iter);
-		gettimeofday(&start_tv, NULL);
+		t0 = seconds();
+		t1 = seconds();
 		#endif
 		//copy csr matrix in
 		cudacall(cudaMalloc((void** ) &csrRowIndex,(m + 1) * sizeof(csrRowIndex[0])));
@@ -1020,10 +744,7 @@ float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const 
 		cudacall(cudaFree(ytheta));
 		cudacall(cudaFree(csrVal));
 		#ifdef DEBUG
-		gettimeofday(&tv, NULL);
-		elapsed = (tv.tv_sec - start_tv.tv_sec)
-				+ (tv.tv_usec - start_tv.tv_usec) / 1000000.0;
-		printf("\tgenerate: Y*theta run %f seconds.\n", elapsed);
+		printf("\tgenerate: Y*theta run %f seconds.\n", seconds() - t1);
 		#endif
 
 		int block_dim = f/T10*(f/T10+1)/2;
@@ -1040,7 +761,7 @@ float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const 
 			int batch_offset = batch_id * (m/X_BATCH);
 			cudacall(cudaMalloc((void** ) &tt, f * f * batch_size * sizeof(float)));
 			#ifdef DEBUG
-			gettimeofday(&start_tv2, NULL);
+			t1 = seconds();
 			printf("\tupdateXByBlock kernel.\n");
 			#endif
 			if(f == 100){
@@ -1055,6 +776,10 @@ float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const 
 				#else
 				get_hermitian100<<<batch_size, 64, SCAN_BATCH * f/2*sizeof(float2)>>>
 					(batch_offset, tt, csrRowIndex, csrColIndex, lambda, m, f, thetaT);
+				//This commented out is the fused kernel
+				//performance not good due to register pressure and low occupancy
+				//alsUpdateFeature100Host
+				//	(batch_offset, csrRowIndex, csrColIndex, lambda, m, f, thetaT, XT, ythetaT, 6);
 				#endif
 			}
 			else
@@ -1063,43 +788,38 @@ float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const 
 			cudaDeviceSynchronize();
 			cudaCheckError();
 			#ifdef DEBUG
-			gettimeofday(&tv, NULL);
-			elapsed = (tv.tv_sec - start_tv2.tv_sec)
-					+ (tv.tv_usec - start_tv2.tv_usec) / 1000000.0;
-			printf("\tupdate X kernel run %f seconds, gridSize: %d, blockSize %d.\n", elapsed, batch_size, f);
-			double t0 = seconds();
+			printf("\tupdate X kernel run %f seconds, gridSize: %d, blockSize %d.\n", seconds() - t1, batch_size, f);
+			t1 = seconds();
 			#endif
+			#ifdef USE_CG
+			updateXWithCGHost(tt, &XT[batch_offset*f], &ythetaT[batch_offset*f], batch_size, f, 6);
+			#else
 			//host pointers for cublas batch operations
 			float ** devPtrTTHost = 0;
 			cudacall(cudaMallocHost( (void** ) &devPtrTTHost, batch_size * sizeof(*devPtrTTHost) ) );
 			float **devPtrYthetaTHost = 0;
 			cudacall(cudaMallocHost( (void** ) &devPtrYthetaTHost, batch_size * sizeof(*devPtrYthetaTHost) ) );
-			#ifdef DEBUG
-			printf("\tinvoke updateX with batch_size: %d, batch_offset: %d..\n", batch_size, batch_offset);
-			#endif
-			
-			//updateXWithCG(1, batch_offset, ythetaT, tt, XT, handle, m, n, f, nnz);
-			updateXWithCGHost(tt, &XT[batch_offset*f], &ythetaT[batch_offset*f], batch_size, f, 6);
-			//updateX(batch_size, batch_offset, ythetaT, tt, XT, handle, m, n, f, nnz, devPtrTTHost, devPtrYthetaTHost);
-			#ifdef DEBUG
-			printf("\tupdateX run seconds: %f \n", seconds() - t0);
-			#endif
-			cudacall(cudaFree(tt));
+			updateX(batch_size, batch_offset, ythetaT, tt, XT, handle, m, n, f, nnz, devPtrTTHost, devPtrYthetaTHost);	
 			cudacall(cudaFreeHost(devPtrTTHost));
 			cudacall(cudaFreeHost(devPtrYthetaTHost));
+			#endif
+			#ifdef DEBUG
+			printf("\tinvoke updateX with batch_size: %d, batch_offset: %d..\n", batch_size, batch_offset);
+			printf("\tupdateX solver run seconds: %f \n", seconds() - t1);
+			#endif
+			cudacall(cudaFree(tt));
 		}
 		#ifdef DEBUG
-		gettimeofday(&tv, NULL);
-		elapsed = (tv.tv_sec - start_tv.tv_sec)
-				+ (tv.tv_usec - start_tv.tv_usec) / 1000000.0;
-		printf("update X run %f seconds, gridSize: %d, blockSize %d.\n", elapsed, m, f);
+		printf("ALS update X run %f seconds, gridSize: %d, blockSize %d.\n", seconds() - t0, m, f);
 		#endif
 		cudacall(cudaFree(csrRowIndex));
 		cudacall(cudaFree(csrColIndex));
 		cudacall(cudaFree(ythetaT));
+
 ///*
 		#ifdef DEBUG
-		gettimeofday(&start_tv, NULL);
+		t0 = seconds();
+		t1 = seconds();
 		printf("---------------------------------- ALS iteration %d, update theta ----------------------------------\n", iter);
 		printf("\tgenerate: Y'*X using cusparse.\n");
 		#endif
@@ -1118,10 +838,7 @@ float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const 
 		cudaDeviceSynchronize();
 		cudacall(cudaFree(yTX));
 		#ifdef DEBUG
-		gettimeofday(&tv, NULL);
-		elapsed = (tv.tv_sec - start_tv.tv_sec)
-				+ (tv.tv_usec - start_tv.tv_usec) / 1000000.0;
-		printf("\tgenerate: Y'*X run %f seconds.\n", elapsed);
+		printf("\tgenerate: Y'*X run %f seconds.\n", seconds() - t1);
 		#endif
 		//in batches, when N is huge
 		for(int batch_id = 0; batch_id< THETA_BATCH; batch_id ++){
@@ -1139,7 +856,7 @@ float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const 
 			cudacall(cudaMalloc((void** ) &xx, f * f * batch_size * sizeof(xx[0])));
 			cudacall( cudaMemset(xx, 0, f*f*batch_size*sizeof(float)) );
 			#ifdef DEBUG
-			gettimeofday(&start_tv2, NULL);
+			t1 = seconds();
 			printf("\tupdateThetaByBlock kernel.\n");
 			#endif
 			//get_hermitian_theta<<<batch_size, 64>>>(batch_offset, xx, cscRowIndex, cscColIndex, lambda, n);
@@ -1163,39 +880,34 @@ float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const 
 			cudaDeviceSynchronize();
 			cudaCheckError();
 			#ifdef DEBUG
-			gettimeofday(&tv, NULL);
-			elapsed = (tv.tv_sec - start_tv2.tv_sec)
-					+ (tv.tv_usec - start_tv2.tv_usec) / 1000000.0;
 			printf("\tupdate Theta kernel run %f seconds, gridSize: %d, blockSize %d.\n",
-					elapsed, batch_size, f);
-			double t0 = seconds();
+					seconds() - t1, batch_size, f);
+			t1 = seconds();
+			#endif			
+			#ifdef DEBUG
+			printf("*******invoke updateTheta with batch_size: %d, batch_offset: %d.\n", batch_size, batch_offset);
 			#endif
-			
+			#ifdef USE_CG
+			updateXWithCGHost(xx, &thetaT[batch_offset*f], &yTXT[batch_offset*f], batch_size, f, 6);
+			#else
 			float ** devPtrXXHost = 0;
 			cudacall(cudaMallocHost( (void** ) &devPtrXXHost, batch_size * sizeof(*devPtrXXHost) ) );
 			float **devPtrYTXTHost = 0;
 			cudacall(cudaMallocHost( (void** ) &devPtrYTXTHost, batch_size * sizeof(*devPtrYTXTHost) ) );
-			#ifdef DEBUG
-			printf("*******invoke updateTheta with batch_size: %d, batch_offset: %d.\n", batch_size, batch_offset);
-			#endif
-			updateXWithCGHost(xx, &thetaT[batch_offset*f], &yTXT[batch_offset*f], batch_size, f, 6);
-
-			//updateTheta(batch_size, batch_offset, xx, yTXT, thetaT, handle, m,  n,  f,  nnz,
-			//		devPtrXXHost, devPtrYTXTHost);
-			#ifdef DEBUG
-			printf("\tupdateTheta run seconds: %f \n", seconds() - t0);
-			#endif
-			cudacall(cudaFree(xx));
+			updateTheta(batch_size, batch_offset, xx, yTXT, thetaT, handle, m,  n,  f,  nnz,
+					devPtrXXHost, devPtrYTXTHost);
 			cudacall(cudaFreeHost(devPtrXXHost));
 			cudacall(cudaFreeHost(devPtrYTXTHost));
+			#endif
+			#ifdef DEBUG
+			printf("\tupdateTheta solver run seconds: %f \n", seconds() - t1);
+			#endif
+			cudacall(cudaFree(xx));
 		}
 		cudacall(cudaFree(yTXT));
 		#ifdef DEBUG
-		gettimeofday(&tv, NULL);
-		elapsed = (tv.tv_sec - start_tv.tv_sec)
-				+ (tv.tv_usec - start_tv.tv_usec) / 1000000.0;
 		printf("update theta run %f seconds, gridSize: %d, blockSize %d.\n",
-				elapsed, n, f);
+				seconds() - t0, n, f);
 		printf("Calculate RMSE.\n");
 		#endif
 		float * errors_train = 0;

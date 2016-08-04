@@ -230,8 +230,221 @@ __global__ void updateXWithCGKernel(float * A, float * x, float * b, const int b
 }
 
 
+//blockDim.x=64 (two WARPs) instead of 100 -- WARP shuffle seems requiring this
+__global__ void updateXWithCGKernel2(float * A, float * x, float * b, const int batchSize, const int f, const float cgIter){
+	extern __shared__ float smem[];
+	float *sharedx = &smem[0];
+	float *sharedp = &smem[f];
+	float *sharedr = &smem[2*f];
+	float *sharedap = &smem[3*f];
+	float *rsold = &smem[4*f]; 
+	float *alpha = &smem[4*f+1];
+	float *rsnew = &smem[4*f+2];
+	float *beta = &smem[4*f+3];
+
+	//sharedx<--x
+	for(int k = threadIdx.x; k < 100; k += 64)
+		sharedx[k] = x[blockIdx.x*f + k];
+	__syncthreads();
+	//r=b-A*x;
+	float temp = 0;
+	for(int k = threadIdx.x; k < 100; k += 64){
+		temp = 0;
+		for(int i = 0; i < f; i++)
+			temp += A[blockIdx.x*f*f + f*i + k]*sharedx[i];
+		sharedr[k] = b[blockIdx.x*f + k] - temp;
+		//p=r;
+		sharedp[k] = sharedr[k];
+	}
+	//rsold=r'*r;
+	if(threadIdx.x == 0){
+		rsold[0] = 0;
+	}
+	temp = 0;
+	for(int k = threadIdx.x; k < 100; k += 64){
+		temp += sharedr[k]*sharedr[k];
+	}
+	blockReduceSumWithAtomics(rsold, temp);	
+    //temp = blockReduceSum(shared, temp);
+	__syncthreads();
+	#ifdef DEBUG
+	if(threadIdx.x==0){
+		printf("***rsold:\n");
+		printf("rsold = %f \n", rsold[0]);
+		printf("***shared memory content after 1st blockReduceSum:\n");
+		for(int i = 0; i < f; i++)
+			printf("%f ", sharedp[i]);
+		printf("\n");
+		for(int i = 0; i < f; i++)
+			printf("%f ", sharedr[i]);
+		printf("\n");
+		for(int i = 0; i < f; i++)
+			printf("%f ", sharedap[i]);
+		printf("\n");
+	}
+	#endif
+
+	for(int iter = 0; iter < cgIter; iter++){
+		//ap=A*p;
+		//WARN: set temp to zero since the next operation is +=!
+		for(int k = threadIdx.x; k < 100; k += 64){
+			temp = 0;
+			for(int i = 0; i < f; i++)
+				temp += A[blockIdx.x*f*f + f*i + k]*sharedp[i];
+			sharedap[k] = temp;
+		}
+		#ifdef DEBUG
+		__syncthreads();
+		if(threadIdx.x==0){
+			printf("----------CG iteration %d \n", iter);
+			printf("***ap:\n");
+			for(int i = 0; i < f; i++)
+				printf("%f ", sharedap[i]);
+			printf("\n");
+			printf("***shared memory content before 2rd blockReduceSum:\n");
+			for(int i = 0; i < f; i++)
+				printf("%f ", sharedp[i]);
+			printf("\n");
+			for(int i = 0; i < f; i++)
+				printf("%f ", sharedr[i]);
+			printf("\n");
+			for(int i = 0; i < f; i++)
+				printf("%f ", sharedap[i]);
+			printf("\n");
+		}
+		#endif
+		if(threadIdx.x == 0){
+			rsnew[0] = 0;
+		}
+		//no need to have sync before blockReduce
+		//because there is a __syncthreads() in blockReduce
+		//pAp=p'*Ap
+		temp = 0;
+		for(int k = threadIdx.x; k < 100; k += 64)
+			temp += sharedp[k]*sharedap[k];		
+		//temp = blockReduceSum(shared, temp);
+		blockReduceSumWithAtomics(rsnew, temp);
+		//sync needed, to let all atomicAdd threads completes
+		__syncthreads();
+		if(threadIdx.x == 0){
+			//pAp = temp;
+			//alpha=rsold/(p'*Ap); use rsnew to store pAp
+			alpha[0] = rsold[0]/rsnew[0];
+			#ifdef DEBUG
+			printf("***rsold:\n");
+			printf("rsold = %f \n", rsold[0]);
+			printf("***pAp:\n");
+			printf("pAp = %f \n", rsnew[0]);
+			printf("***alpha:\n");
+			printf("alpha = %f \n", alpha[0]);
+			#endif
+			rsnew[0] = 0;
+		}
+		//needed, aplpha[0] to be used by all threads
+		__syncthreads();
+		for(int k = threadIdx.x; k < 100; k += 64){
+			//x=x+alpha*p;
+			sharedx[k] = 
+				sharedx[k] + alpha[0] * sharedp[k];
+			//r=r-alpha*Ap;
+			sharedr[k] = 
+				sharedr[k] - alpha[0] * sharedap[k];
+		}
+		//NOT needed?
+		//__syncthreads();
+		#ifdef DEBUG
+		__syncthreads();
+		if(threadIdx.x==0){
+			printf("***shared memory content before 3rd blockReduceSum:\n");
+			for(int i = 0; i < f; i++)
+				printf("%f ", sharedp[i]);
+			printf("\n");
+			for(int i = 0; i < f; i++)
+				printf("%f ", sharedr[i]);
+			printf("\n");
+			for(int i = 0; i < f; i++)
+				printf("%f ", sharedap[i]);
+			printf("\n");
+		}
+		#endif
+		
+		//rsnew=r'*r;
+		/*
+		temp = sharedr[threadIdx.x]*sharedr[threadIdx.x];
+		temp = blockReduceSum(shared, temp);
+		__syncthreads();
+		if(threadIdx.x == 0){
+			rsnew[0] = temp;
+		}
+		*/
+		temp = 0;
+		for(int k = threadIdx.x; k < 100; k += 64)
+			temp += sharedr[k]*sharedr[k];
+		blockReduceSumWithAtomics(rsnew, temp);
+		//WARN: has to have this sync!
+		__syncthreads();
+
+		#ifdef DEBUG
+		if(threadIdx.x==0){
+			printf("***rsnew:\n");
+			printf("rsnew = %f \n", rsnew[0]);
+			printf("***shared memory content after 3rd blockReduceSum:\n");
+			for(int i = 0; i < f; i++)
+				printf("%f ", sharedp[i]);
+			printf("\n");
+			for(int i = 0; i < f; i++)
+				printf("%f ", sharedr[i]);
+			printf("\n");
+			for(int i = 0; i < f; i++)
+				printf("%f ", sharedap[i]);
+			printf("\n");
+		}
+		#endif
+		if(rsnew[0]<1e-4)
+			break;
+		//NOT needed?
+		//__syncthreads();
+		//beta
+		if(threadIdx.x == 0){
+			beta[0] = rsnew[0]/rsold[0];
+			//rsold=rsnew;
+			rsold[0] = rsnew[0];
+		}
+		//need sync since every thread needs beta[0]
+		__syncthreads();
+		for(int k = threadIdx.x; k < 100; k += 64)
+			//p=r+(rsnew/rsold)*p;
+			sharedp[k] = 
+				sharedr[k] + beta[0] * sharedp[k];
+		//need sync as every thread needs sharedp at the beginning of for
+		__syncthreads();
+		#ifdef DEBUG
+		__syncthreads();
+		if(threadIdx.x==0){
+			printf("***shared memory content after update p:\n");
+			for(int i = 0; i < f; i++)
+				printf("%f ", sharedp[i]);
+			printf("\n");
+			for(int i = 0; i < f; i++)
+				printf("%f ", sharedr[i]);
+			printf("\n");
+			for(int i = 0; i < f; i++)
+				printf("%f ", sharedap[i]);
+			printf("\n");
+		}
+		__syncthreads();
+		#endif
+	}//end of CG iterations
+	for(int k = threadIdx.x; k < 100; k += 64)
+		//x<--sharedx
+		x[blockIdx.x*f + k] = sharedx[k];
+}
+
+
+
 void updateXWithCGHost(float * A, float * x, float * b, const int batchSize, const int f, const float cgIter){
-	updateXWithCGKernel<<<batchSize, f, (4*f+4)*sizeof(float)>>>
+	//updateXWithCGKernel<<<batchSize, f, (4*f+4)*sizeof(float)>>>
+	updateXWithCGKernel2<<<batchSize, 64, (4*f+4)*sizeof(float)>>>
 		(A, x, b, batchSize, f, cgIter);
 	cudaDeviceSynchronize();
 	cudaCheckError();

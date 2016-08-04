@@ -13,7 +13,7 @@
 #include<stdio.h>
 #include <string>
 
-#define DEVICEID 0
+#define DEVICEID 3
 #define ITERS 10
 
 /*

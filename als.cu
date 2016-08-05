@@ -792,7 +792,8 @@ float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const 
 			t1 = seconds();
 			#endif
 			#ifdef USE_CG
-			updateXWithCGHost(tt, &XT[batch_offset*f], &ythetaT[batch_offset*f], batch_size, f, 6);
+			//cg_iter = als_iter: solve more carefully in later ALS iterations
+			updateXWithCGHost(tt, &XT[batch_offset*f], &ythetaT[batch_offset*f], batch_size, f, iter);
 			#else
 			//host pointers for cublas batch operations
 			float ** devPtrTTHost = 0;

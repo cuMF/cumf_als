@@ -230,7 +230,7 @@ __global__ void updateXWithCGKernel(float * A, float * x, float * b, const int b
 }
 
 
-//blockDim.x=64 (two WARPs) instead of 100 -- WARP shuffle seems requiring this
+//blockDim.x=64 or 96 (two or three WARPs) instead of 100 -- WARP shuffle seems requiring this
 __global__ void updateXWithCGKernel2(float * A, float * x, float * b, const int batchSize, const int f, const float cgIter){
 	extern __shared__ float smem[];
 	float *sharedx = &smem[0];
@@ -243,12 +243,12 @@ __global__ void updateXWithCGKernel2(float * A, float * x, float * b, const int 
 	float *beta = &smem[4*f+3];
 
 	//sharedx<--x
-	for(int k = threadIdx.x; k < 100; k += 64)
+	for(int k = threadIdx.x; k < f; k += blockDim.x)
 		sharedx[k] = x[blockIdx.x*f + k];
 	__syncthreads();
 	//r=b-A*x;
 	float temp = 0;
-	for(int k = threadIdx.x; k < 100; k += 64){
+	for(int k = threadIdx.x; k < f; k += blockDim.x){
 		temp = 0;
 		for(int i = 0; i < f; i++)
 			temp += A[blockIdx.x*f*f + f*i + k]*sharedx[i];
@@ -261,7 +261,7 @@ __global__ void updateXWithCGKernel2(float * A, float * x, float * b, const int 
 		rsold[0] = 0;
 	}
 	temp = 0;
-	for(int k = threadIdx.x; k < 100; k += 64){
+	for(int k = threadIdx.x; k < f; k += blockDim.x){
 		temp += sharedr[k]*sharedr[k];
 	}
 	blockReduceSumWithAtomics(rsold, temp);	
@@ -287,7 +287,7 @@ __global__ void updateXWithCGKernel2(float * A, float * x, float * b, const int 
 	for(int iter = 0; iter < cgIter; iter++){
 		//ap=A*p;
 		//WARN: set temp to zero since the next operation is +=!
-		for(int k = threadIdx.x; k < 100; k += 64){
+		for(int k = threadIdx.x; k < f; k += blockDim.x){
 			temp = 0;
 			for(int i = 0; i < f; i++)
 				temp += A[blockIdx.x*f*f + f*i + k]*sharedp[i];
@@ -320,7 +320,7 @@ __global__ void updateXWithCGKernel2(float * A, float * x, float * b, const int 
 		//because there is a __syncthreads() in blockReduce
 		//pAp=p'*Ap
 		temp = 0;
-		for(int k = threadIdx.x; k < 100; k += 64)
+		for(int k = threadIdx.x; k < f; k += blockDim.x)
 			temp += sharedp[k]*sharedap[k];		
 		//temp = blockReduceSum(shared, temp);
 		blockReduceSumWithAtomics(rsnew, temp);
@@ -342,7 +342,7 @@ __global__ void updateXWithCGKernel2(float * A, float * x, float * b, const int 
 		}
 		//needed, aplpha[0] to be used by all threads
 		__syncthreads();
-		for(int k = threadIdx.x; k < 100; k += 64){
+		for(int k = threadIdx.x; k < f; k += blockDim.x){
 			//x=x+alpha*p;
 			sharedx[k] = 
 				sharedx[k] + alpha[0] * sharedp[k];
@@ -378,7 +378,7 @@ __global__ void updateXWithCGKernel2(float * A, float * x, float * b, const int 
 		}
 		*/
 		temp = 0;
-		for(int k = threadIdx.x; k < 100; k += 64)
+		for(int k = threadIdx.x; k < f; k += blockDim.x)
 			temp += sharedr[k]*sharedr[k];
 		blockReduceSumWithAtomics(rsnew, temp);
 		//WARN: has to have this sync!
@@ -412,7 +412,7 @@ __global__ void updateXWithCGKernel2(float * A, float * x, float * b, const int 
 		}
 		//need sync since every thread needs beta[0]
 		__syncthreads();
-		for(int k = threadIdx.x; k < 100; k += 64)
+		for(int k = threadIdx.x; k < f; k += blockDim.x)
 			//p=r+(rsnew/rsold)*p;
 			sharedp[k] = 
 				sharedr[k] + beta[0] * sharedp[k];
@@ -435,16 +435,14 @@ __global__ void updateXWithCGKernel2(float * A, float * x, float * b, const int 
 		__syncthreads();
 		#endif
 	}//end of CG iterations
-	for(int k = threadIdx.x; k < 100; k += 64)
+	for(int k = threadIdx.x; k < f; k += blockDim.x)
 		//x<--sharedx
 		x[blockIdx.x*f + k] = sharedx[k];
 }
 
-
-
 void updateXWithCGHost(float * A, float * x, float * b, const int batchSize, const int f, const float cgIter){
-	//updateXWithCGKernel<<<batchSize, f, (4*f+4)*sizeof(float)>>>
-	updateXWithCGKernel2<<<batchSize, 64, (4*f+4)*sizeof(float)>>>
+	updateXWithCGKernel<<<batchSize, f, (4*f+4)*sizeof(float)>>>
+	//updateXWithCGKernel2<<<batchSize, 96, (4*f+4)*sizeof(float)>>>
 		(A, x, b, batchSize, f, cgIter);
 	cudaDeviceSynchronize();
 	cudaCheckError();

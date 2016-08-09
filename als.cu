@@ -739,8 +739,8 @@ float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const 
 		//ytheta: m*f; need ythetaT = (ytheta).T = f*m
 		cublascall(cublasSgeam(handle, CUBLAS_OP_T, CUBLAS_OP_N, f, m, &alpha,
 				(const float * ) ytheta, m, &beta, ythetaT, f, ythetaT, f));
-		cudaDeviceSynchronize();
-		cudaCheckError();
+		//cudaDeviceSynchronize();
+		//cudaCheckError();
 		cudacall(cudaFree(ytheta));
 		cudacall(cudaFree(csrVal));
 		#ifdef DEBUG
@@ -793,7 +793,7 @@ float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const 
 			#endif
 			#ifdef USE_CG
 			//cg_iter = als_iter: solve more carefully in later ALS iterations
-			updateXWithCGHost(tt, &XT[batch_offset*f], &ythetaT[batch_offset*f], batch_size, f, iter);
+			updateXWithCGHost(tt, &XT[batch_offset*f], &ythetaT[batch_offset*f], batch_size, f, 6);
 			#else
 			//host pointers for cublas batch operations
 			float ** devPtrTTHost = 0;

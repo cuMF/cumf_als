@@ -48,4 +48,6 @@ void blockReduceSumWithAtomics(float *out,float val) {
 }
 
 __global__ void fp32Array2fp16Array(const float * fp32Array, half* fp16Array, const int size);
+__global__ void fp16Array2fp32Array(float * fp32Array, const half* fp16Array, const int size);
+
 #endif

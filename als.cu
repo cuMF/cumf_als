@@ -26,6 +26,10 @@
 //#define CUMF_USE_MAGMA
 //#define CUMF_USE_HALF
 //#define SURPASS_NAN
+//#define CUMF_TT_FP16
+//#define CUMF_XX_FP16
+#define CG_ITER 6
+
 #include "als.h"
 #include "device_utilities.h"
 #include "cg.h"
@@ -45,8 +49,6 @@
 #include "magma_lapack.h"
 #include "testings.h"
 #endif
-
-
 
 int updateX(const int batch_size, const int batch_offset, float * ythetaT, float * tt, float * XT,
 		cublasHandle_t handle, const int m, const int n, const int f, const int nnz,
@@ -395,7 +397,7 @@ get_hermitian100WithHalf(const int batch_offset, float* tt,
 
 __global__ void
 __launch_bounds__(64, 6)
-get_hermitian100(const int batch_offset, float* tt,
+get_hermitian100_tt_fp16(const int batch_offset, half2* tt,
 		const int* csrRowIndex, const int* csrColIndex, const float lambda, const int m, const int F,
 		const float* __restrict__ thetaT) {
 	extern __shared__ float2 thetaTemp[];
@@ -520,6 +522,176 @@ get_hermitian100(const int batch_offset, float* tt,
 					memset(&thetaTemp[(threadIdx.x - y_start)*F/2 + y_start/2], 0, (y_end - y_start)*sizeof(float));
 			}
 
+*/
+			__syncthreads();
+
+			//tile: 10*10
+			if(threadIdx.x < 55 ){
+				for(int k = 0; k < SCAN_BATCH; k++){
+					accumulate_in_registers();
+				}
+			}
+		}
+		//end of iteration in copying from smem and aggregating in register
+		__syncthreads();
+		#ifdef DEBUG
+		//if(threadIdx.x==0)
+		//	printf("***temp 0~9: %f %f %f %f %f %f %f %f %f %f\n", temp0, temp1, temp2, temp3, temp4, temp5, temp6, temp7, temp8, temp9);
+		#endif
+		if(threadIdx.x < 55 ){
+			//weighted-lambda regularization
+			if(tile_x == tile_y){
+				float temp = (end - start) * lambda;
+				temp0 += temp;
+				temp11 += temp;
+				temp22 += temp;
+				temp33 += temp;
+				temp44 += temp;
+				temp55 += temp;
+				temp66 += temp;
+				temp77 += temp;
+				temp88 += temp;
+				temp99 += temp;
+			}
+			//copy output to gmem
+			int index = blockIdx.x*F*F/2;
+			//fill_lower_half_from_registers();
+			fill_lower_half_from_registers_fp16();
+			//symmetric
+			if(tile_x!=tile_y){
+				//fill_upper_half_from_registers();
+				fill_upper_half_from_registers_fp16();
+			}
+		}
+	}
+}
+
+__global__ void
+__launch_bounds__(64, 6)
+get_hermitian100(const int batch_offset, float* tt,
+		const int* csrRowIndex, const int* csrColIndex, const float lambda, const int m, const int F,
+		const float* __restrict__ thetaT) {
+	extern __shared__ float2 thetaTemp[];
+	int row = blockIdx.x + batch_offset;
+	if (row < m) {
+		//this block needs to handle end - start thetaT columns
+		int start = csrRowIndex[row];
+		int end = csrRowIndex[row + 1];
+		//slide through [start, end] by window size SCAN_BATCH
+		int iterations = (end - start - 1)/SCAN_BATCH + 1;
+		float temp0= 0, temp1= 0, temp2= 0, temp3= 0, temp4= 0, temp5= 0, temp6= 0, temp7= 0, temp8= 0, temp9 = 0;
+		float temp10= 0, temp11= 0, temp12= 0, temp13= 0, temp14= 0, temp15= 0, temp16= 0, temp17= 0, temp18= 0, temp19 = 0;
+		float temp20= 0, temp21= 0, temp22= 0, temp23= 0, temp24= 0, temp25= 0, temp26= 0, temp27= 0, temp28= 0, temp29 = 0;
+		float temp30= 0, temp31= 0, temp32= 0, temp33= 0, temp34= 0, temp35= 0, temp36= 0, temp37= 0, temp38= 0, temp39 = 0;
+		float temp40= 0, temp41= 0, temp42= 0, temp43= 0, temp44= 0, temp45= 0, temp46= 0, temp47= 0, temp48= 0, temp49 = 0;
+		float temp50= 0, temp51= 0, temp52= 0, temp53= 0, temp54= 0, temp55= 0, temp56= 0, temp57= 0, temp58= 0, temp59 = 0;
+		float temp60= 0, temp61= 0, temp62= 0, temp63= 0, temp64= 0, temp65= 0, temp66= 0, temp67= 0, temp68= 0, temp69 = 0;
+		float temp70= 0, temp71= 0, temp72= 0, temp73= 0, temp74= 0, temp75= 0, temp76= 0, temp77= 0, temp78= 0, temp79 = 0;
+		float temp80= 0, temp81= 0, temp82= 0, temp83= 0, temp84= 0, temp85= 0, temp86= 0, temp87= 0, temp88= 0, temp89 = 0;
+		float temp90= 0, temp91= 0, temp92= 0, temp93= 0, temp94= 0, temp95= 0, temp96= 0, temp97= 0, temp98= 0, temp99 = 0;
+
+		int tile_x = 0;
+		int tile_y = 0;
+
+		int tile = F/10;
+		for ( int i = 0; i < 10; i++){
+			int end = ((20-i)*(i+1))/2;
+			if(threadIdx.x < end){
+				tile_x = i * tile;
+				tile_y = (10 + threadIdx.x - end) * tile;
+				break;
+			}
+		}
+		//iteration: copy gmem-->smem; aggregate smem-->register
+		for (int iter = 0; iter < iterations; iter ++){
+			float2 theta;
+			//copy texture --> smem, and sync
+/*
+			if(threadIdx.x < SCAN_BATCH){
+				if(iter*SCAN_BATCH + threadIdx.x < end - start){
+					for (int k = 0; k < F; k += 2){
+						theta.x = tex1Dfetch(thetaTTexRef, F * csrColIndex[start + iter*SCAN_BATCH + threadIdx.x] + k);
+						theta.y = tex1Dfetch(thetaTTexRef, F * csrColIndex[start + iter*SCAN_BATCH + threadIdx.x] + k+1);
+						thetaTemp[threadIdx.x * F/2 + k/2] = theta;
+					}
+				}
+				//must be the last iteration; no need to check
+				//not enough theta to copy, set zero
+				else
+					memset(&thetaTemp[threadIdx.x*F/2], 0, F*sizeof(float));
+			}
+*/
+
+			//two layers: warp divergence unless we split at 32
+			//require 32 >= SCAN_BATCH
+			if(threadIdx.x < 2*32 ){
+				//int index = threadIdx.x;
+				int index = threadIdx.x - (threadIdx.x/32)*32;	//0 to 31;
+				if(index < SCAN_BATCH){
+					if(iter*SCAN_BATCH + index < end - start){
+						//for (int k = 50*(threadIdx.x/32); k < 50*(threadIdx.x/32) + 50; k += 2){
+						//IMPORTANT: for loop has constant and identical start and end
+						if(threadIdx.x < 32){
+							for (int k = 0; k < 50; k += 2){
+								theta.x = __ldg(&thetaT[ F * csrColIndex[start + iter*SCAN_BATCH + index] + k]);
+								theta.y = __ldg(&thetaT[ F * csrColIndex[start + iter*SCAN_BATCH + index] + k+1]);
+								thetaTemp[index * F/2 + k/2] = theta;
+							}
+						}
+						else {
+							for (int k = 0; k < 50; k += 2){
+								theta.x = __ldg(&thetaT[ F * csrColIndex[start + iter*SCAN_BATCH + index] + k + 50]);
+								theta.y = __ldg(&thetaT[ F * csrColIndex[start + iter*SCAN_BATCH + index] + k + 51]);
+								thetaTemp[index * F/2 + k/2 + 25] = theta;
+							}
+						}
+					}
+					//must be the last iteration; no need to check
+					//not enough theta to copy, set zero
+					else
+						memset(&thetaTemp[index*F/2], 0, F*sizeof(float));
+				}
+			}
+
+
+/*			//issue: not coalesced access to csrColIndex
+			if(threadIdx.x < F && threadIdx.x%2 == 0){
+				for(int k = 0; k< SCAN_BATCH; k++){
+					if(iter*SCAN_BATCH + k < end - start){
+						theta.x = tex1Dfetch(thetaTTexRef, F * csrColIndex[start + iter*SCAN_BATCH + k] + threadIdx.x);
+						theta.y = tex1Dfetch(thetaTTexRef, F * csrColIndex[start + iter*SCAN_BATCH + k] + threadIdx.x +1);
+						thetaTemp[k * F/2 + threadIdx.x/2] = theta;
+					}
+					//must be the last iteration; no need to check
+					//not enough theta to copy, set zero
+					else
+						memset(&thetaTemp[k*F/2 + threadIdx.x/2], 0, 2*sizeof(float));
+				}
+			}
+*/
+/*
+			int layers = blockDim.x/SCAN_BATCH;	//100/30 = 3
+			//int height = blockDim.x/layers; //30
+			int y = threadIdx.x/SCAN_BATCH;//0,1,2,3; y==3 is not viable
+			//min(y, (layers-1)) * height
+			int y_start = y * 30;//0-29:0;30-59:30;60-89:60
+			int y_end = y_start + 30;	//0-29:30;30-59:60;60-89:90
+			if(y >= layers - 1) y_end = F;	//60-89:100
+			if(threadIdx.x - y_start < SCAN_BATCH){
+				if(iter*SCAN_BATCH + (threadIdx.x - y_start) < end - start){
+					for (int k = y_start; k < y_end; k += 2){
+						theta.x =
+								tex1Dfetch(thetaTTexRef, F * csrColIndex[start + iter*SCAN_BATCH + (threadIdx.x - y_start)] + k);
+						theta.y =
+								tex1Dfetch(thetaTTexRef, F * csrColIndex[start + iter*SCAN_BATCH + (threadIdx.x - y_start)] + k+1);
+						thetaTemp[(threadIdx.x - y_start)* F/2 + k/2] = theta;
+					}
+				}
+				//must be the last iteration; no need to check
+				//not enough theta to copy, set zero
+				else
+					memset(&thetaTemp[(threadIdx.x - y_start)*F/2 + y_start/2], 0, (y_end - y_start)*sizeof(float));
+			}
 */
 			__syncthreads();
 
@@ -759,7 +931,12 @@ float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const 
 			else
 				batch_size = m - batch_id*(m/X_BATCH);
 			int batch_offset = batch_id * (m/X_BATCH);
+			//use fp16 in tt
+			#ifdef CUMF_TT_FP16
+			cudacall(cudaMalloc((void** ) &tt, f/2 * f * batch_size * sizeof(float)));
+			#else
 			cudacall(cudaMalloc((void** ) &tt, f * f * batch_size * sizeof(float)));
+			#endif
 			#ifdef DEBUG
 			t1 = seconds();
 			printf("\tupdateXByBlock kernel.\n");
@@ -773,9 +950,13 @@ float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const 
 				get_hermitian100WithHalf<<<batch_size, 64, SCAN_BATCH * f/2*sizeof(float2)>>>
 					(batch_offset, tt, csrRowIndex, csrColIndex, lambda, m, f, thetaT_fp16);
 				cudacall(cudaFree(thetaT_fp16));
+				#elif defined(CUMF_TT_FP16)
+				get_hermitian100_tt_fp16<<<batch_size, 64, SCAN_BATCH * f/2*sizeof(float2)>>>
+					(batch_offset, (half2*) tt, csrRowIndex, csrColIndex, lambda, m, f, thetaT);				
 				#else
 				get_hermitian100<<<batch_size, 64, SCAN_BATCH * f/2*sizeof(float2)>>>
 					(batch_offset, tt, csrRowIndex, csrColIndex, lambda, m, f, thetaT);
+
 				//This commented out is the fused kernel
 				//performance not good due to register pressure and low occupancy
 				//alsUpdateFeature100Host
@@ -792,8 +973,14 @@ float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const 
 			t1 = seconds();
 			#endif
 			#ifdef USE_CG
-			//cg_iter = als_iter: solve more carefully in later ALS iterations
-			updateXWithCGHost(tt, &XT[batch_offset*f], &ythetaT[batch_offset*f], batch_size, f, 6);
+				#ifdef CUMF_TT_FP16
+				//cg_iter = als_iter: solve more carefully in later ALS iterations
+				printf("CG solver with fp16.\n");
+				updateXWithCGHost_tt_fp16(tt, &XT[batch_offset*f], &ythetaT[batch_offset*f], batch_size, f, CG_ITER);
+				#else
+				printf("CG solver with fp32.\n");
+				updateXWithCGHost(tt, &XT[batch_offset*f], &ythetaT[batch_offset*f], batch_size, f, 6);
+				#endif
 			#else
 			//host pointers for cublas batch operations
 			float ** devPtrTTHost = 0;
@@ -854,8 +1041,13 @@ float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const 
 			int batch_offset = batch_id * (n/THETA_BATCH);
 
 			float * xx = 0;
+			#ifdef CUMF_XX_FP16
+			cudacall(cudaMalloc((void** ) &xx, f/2 * f * batch_size * sizeof(xx[0])));
+			cudacall( cudaMemset(xx, 0, f/2*f*batch_size*sizeof(float)) );
+			#else
 			cudacall(cudaMalloc((void** ) &xx, f * f * batch_size * sizeof(xx[0])));
 			cudacall( cudaMemset(xx, 0, f*f*batch_size*sizeof(float)) );
+			#endif
 			#ifdef DEBUG
 			t1 = seconds();
 			printf("\tupdateThetaByBlock kernel.\n");
@@ -870,6 +1062,9 @@ float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const 
 				get_hermitian100WithHalf<<<batch_size, 64, SCAN_BATCH * f/2*sizeof(float2)>>>
 					(batch_offset, xx, cscColIndex, cscRowIndex, lambda, n, f, XT_fp16);
 				cudacall(cudaFree(XT_fp16));
+				#elif defined(CUMF_XX_FP16)
+				get_hermitian100_tt_fp16<<<batch_size, 64, SCAN_BATCH * f/2*sizeof(float2)>>>
+					(batch_offset, (half2*) xx, cscColIndex, cscRowIndex, lambda, n, f, XT);
 				#else
 				get_hermitian100<<<batch_size, 64, SCAN_BATCH * f/2*sizeof(float2)>>>
 					(batch_offset, xx, cscColIndex, cscRowIndex, lambda, n, f, XT);
@@ -889,7 +1084,13 @@ float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const 
 			printf("*******invoke updateTheta with batch_size: %d, batch_offset: %d.\n", batch_size, batch_offset);
 			#endif
 			#ifdef USE_CG
-			updateXWithCGHost(xx, &thetaT[batch_offset*f], &yTXT[batch_offset*f], batch_size, f, 6);
+				#ifdef CUMF_XX_FP16
+				printf("CG solver with fp16.\n");
+				updateXWithCGHost_tt_fp16(xx, &thetaT[batch_offset*f], &yTXT[batch_offset*f], batch_size, f, CG_ITER);
+				#else
+				printf("CG solver with fp32.\n");
+				updateXWithCGHost(xx, &thetaT[batch_offset*f], &yTXT[batch_offset*f], batch_size, f, 6);
+				#endif
 			#else
 			float ** devPtrXXHost = 0;
 			cudacall(cudaMallocHost( (void** ) &devPtrXXHost, batch_size * sizeof(*devPtrXXHost) ) );

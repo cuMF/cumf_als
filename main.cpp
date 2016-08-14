@@ -177,8 +177,8 @@ int main(int argc, char **argv) {
 
 	/*
 	//write out the model	
-	FILE * xfile = fopen("XT-CG.data", "wb");
-	FILE * thetafile = fopen("thetaT-CG.data", "wb");
+	FILE * xfile = fopen("XT-Yahoo.data", "wb");
+	FILE * thetafile = fopen("thetaT-Yahoo.data", "wb");
 	fwrite(XTHost, sizeof(float), m*f, xfile);
 	fwrite(thetaTHost, sizeof(float), n*f, thetafile);
 	fclose(xfile);

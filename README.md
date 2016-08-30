@@ -1,4 +1,4 @@
-# CuMF: CUDA-Acclerated ALS on mulitple GPUs. 
+# CuMF: CUDA-Accelerated ALS on multiple GPUs.
 
 ## What is matrix factorization?
 
@@ -12,11 +12,11 @@ Matrix factorization (MF) is at the core of many popular algorithms, e.g., [coll
 
 **CuMF** is a CUDA-based matrix factorization library that optimizes alternate least square (ALS) method to solve very large-scale MF. CuMF uses a set of techniques to maximize the performance on single and multiple GPUs. These techniques include smart access of sparse data leveraging GPU memory hierarchy, using data parallelism in conjunction with model parallelism, minimizing the communication overhead among GPUs, and a novel topology-aware parallel reduction scheme.
 
-With only a single machine with four Nvidia GPU cards, cuMF can be 6-10 times as fast, and 33-100 times as cost-efficient, compared with the state-of-art distributed CPU solutions. Moreover, cuMF can solve the largest matrix factorization problem ever reported yet in current literature. 
+With only a single machine with four Nvidia GPU cards, cuMF can be 6-10 times as fast, and 33-100 times as cost-efficient, compared with the state-of-art distributed CPU solutions. Moreover, cuMF can solve the largest matrix factorization problem ever reported yet in current literature.
 
 CuMF achieves excellent scalability and performance by innovatively applying the following techniques on GPUs:  
 
-(1) On one GPU, MF deals with sparse matrices, which makes it difficult to utilize GPU's compute power. We optimize memory access in ALS by various techniques including reducing discontiguous memory access, retaining hotspot variables in faster memory, and aggressively using registers. By this means cuMF gets closer to the roofline performance of a single GPU. 
+(1) On one GPU, MF deals with sparse matrices, which makes it difficult to utilize GPU's compute power. We optimize memory access in ALS by various techniques including reducing discontiguous memory access, retaining hotspot variables in faster memory, and aggressively using registers. By this means cuMF gets closer to the roofline performance of a single GPU.
 
 (2) On multiple GPUs, we add data parallelism to ALS's inherent model parallelism. Data parallelism needs a faster reduction operation among GPUs, leading to (3).
 
@@ -26,7 +26,7 @@ CuMF achieves excellent scalability and performance by innovatively applying the
 
 CuMF can be used standalone, or to accelerate the [ALS implementation in Spark MLlib](https://github.com/apache/spark/blob/master/mllib/src/main/scala/org/apache/spark/ml/recommendation/ALS.scala).
 
-We modified Spark's ml/recommendation/als.scala ([code](https://github.com/wei-tan/SparkGPU/blob/MLlib/mllib/src/main/scala/org/apache/spark/ml/recommendation/ALS.scala)) to detect GPU and offload the ALS forming and solving to GPUs, while retain shuffling on Spark RDD. 
+We modified Spark's ml/recommendation/als.scala ([code](https://github.com/wei-tan/SparkGPU/blob/MLlib/mllib/src/main/scala/org/apache/spark/ml/recommendation/ALS.scala)) to detect GPU and offload the ALS forming and solving to GPUs, while retain shuffling on Spark RDD.
 
 <img src=https://github.com/wei-tan/CUDA-MLlib/raw/master/als/images/spark-gpu.png width=380 height=240 />
 
@@ -36,11 +36,11 @@ This approach has several advantages. First, existing apps relying on mllib/ALS 
 
 Type:
 
-	make clean build
+    make clean build
 
 To see debug message, such as run-time in each step, type:
 
-	make clean debug
+    make clean debug
 
 ## Input Data
 
@@ -48,15 +48,15 @@ CuMF need training and testing rating matrices in binary format, and in CSR, CSC
 
 For Netflix data, type:
 
-	cd ./data/netflix/
-	python ./prepare_netflix_data.py 
+    cd ./data/netflix/
+    python ./prepare_netflix_data.py
 
 Note: this can take 30+ minutes. You can download this [file](https://ibm.box.com/s/5vmh77up8reodvihiq0ri66jltg9h4uh) from your brower, extract and put the extracted files in ./data/netflix directly.
 
 For Movielens:
 
-	cd ./data/ml10M/
-	ipython prepare_ml10M_data.py
+    cd ./data/ml10M/
+    ipython prepare_ml10M_data.py
 
 Note: you will encounter a NaN test RMSE. Please refer to the "Known Issues" Section.
 
@@ -68,24 +68,24 @@ Usage: give M, N, F, NNZ, NNZ_TEST, lambda, X_BATCH, THETA_BATCH and DATA_DIR.
 
 E.g., for netflix data set, use:
 
-	./main 17770 480189 100 99072112 1408395 0.058 1 3 ./data/netflix/
-	
+    ./main 17770 480189 100 99072112 1408395 0.058 1 3 ./data/netflix/
+    
 E.g., for movielens 10M data set, use:
 
-	./main 71567 65133 100 9000048 1000006 0.05 1 1 ./data/ml10M/
-	
-E.g., for yahooMusic data set, use:
+    ./main 71567 65133 100 9000048 1000006 0.05 1 1 ./data/ml10M/
+    
+E.g., for yahooMusic dataset, use:
 
-	./main 1000990 624961 100 252800275 4003960 1.1 6 3 ./data/yahoo/
+    ./main 1000990 624961 100 252800275 4003960 1.1 6 3 ./data/yahoo/
 
 Prepare the data as instructed in the previous section, before you run.
 
-Note: rank value F has to be a multiply of 10, e.g., 10, 50, 100, 200. 
+Note: rank value F has to be a multiple of 10, e.g., 10, 50, 100, 200.
 
 ## Known Issues
 We are trying to improve the usability, stability and performance. Here are some known issues we are working on:
 
-(1) NaN test error. This is because in some data sets such as movielens 10M, there are users or items with no ratings in training set but some ratings in test set. To overcome this, we have defined a flag in als.cu (#define SURPASS_NAN). If SURPASS_NAN is defined, we check NaN in calculating RMSE and ignore the NaN values. Normally #define SURPASS_NAN should be commented out, as the additional check slows down the computation.
+(1) NaN test error. This is because in some datasets such as movielens 10M, there are users or items with no ratings in training set but some ratings in test set. To overcome this, we have defined a flag in als.cu (#define SURPASS_NAN). If SURPASS_NAN is defined, we check NaN in calculating RMSE and ignore the NaN values. Normally #define SURPASS_NAN should be commented out, as the additional check slows down the computation.
 
 (2) Multi GPU support. We have tested on very large data sets such as [SparkALS](https://databricks.com/blog/2014/07/23/scalable-collaborative-filtering-with-spark-mllib.html) and HugeWiki, on multiple GPUs on one server. We will make our multi GPU support code available soon.
 

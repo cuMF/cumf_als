@@ -26,10 +26,11 @@
 //#define CUMF_USE_MAGMA
 //#define CUMF_USE_HALF
 //#define SURPASS_NAN
+#define USE_CG 
 //#define CUMF_TT_FP16
 //#define CUMF_XX_FP16
 #define CG_ITER 6
-
+//#define CUMF_SAVE_MODEL
 #include "als.h"
 #include "device_utilities.h"
 #include "cg.h"
@@ -37,7 +38,6 @@
 #include <fstream>
 #include <assert.h>
 #include <cuda_fp16.h>
-#define USE_CG 
 #ifdef CUMF_USE_HALF
 #define SCAN_BATCH 24
 #else
@@ -50,6 +50,18 @@
 #include "testings.h"
 #endif
 
+#include <iostream>
+using namespace std;
+
+void saveDeviceFloatArrayToFile(string fileName, int size, float* d_array){
+	float* h_array;
+	cudacall(cudaMallocHost( (void** ) &h_array, size * sizeof(h_array[0])) );
+	cudacall(cudaMemcpy(h_array, d_array, size * sizeof(h_array[0]),cudaMemcpyDeviceToHost));
+	FILE * outfile = fopen(fileName.c_str(), "wb");
+	fwrite(h_array, sizeof(float), size, outfile);
+	fclose(outfile);
+	cudaFreeHost(h_array);
+}
 int updateX(const int batch_size, const int batch_offset, float * ythetaT, float * tt, float * XT,
 		cublasHandle_t handle, const int m, const int n, const int f, const int nnz,
 		float** devPtrTTHost, float **devPtrYthetaTHost){
@@ -379,17 +391,26 @@ get_hermitian100WithHalf(const int batch_offset, float* tt,
 		__syncthreads();
 
 		if(threadIdx.x < 55 ){
+			//weighted-lambda regularization
+			if(tile_x == tile_y){
+				float temp = (end - start) * lambda;
+				temp0 += temp;
+				temp11 += temp;
+				temp22 += temp;
+				temp33 += temp;
+				temp44 += temp;
+				temp55 += temp;
+				temp66 += temp;
+				temp77 += temp;
+				temp88 += temp;
+				temp99 += temp;
+			}
 			//copy output to gmem
 			int index = blockIdx.x*F*F;
 			fill_lower_half_from_registers();
 			//symmetric
 			if(tile_x!=tile_y){
 				fill_upper_half_from_registers();
-			}
-			//regularization
-			if(tile_x == tile_y){
-				for(int k = 0; k < tile; k++)
-					tt[index + (tile_x+k)*(1+F)] += (end - start) * lambda;
 			}
 		}
 	}
@@ -952,11 +973,16 @@ float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const 
 				cudacall(cudaFree(thetaT_fp16));
 				#elif defined(CUMF_TT_FP16)
 				get_hermitian100_tt_fp16<<<batch_size, 64, SCAN_BATCH * f/2*sizeof(float2)>>>
-					(batch_offset, (half2*) tt, csrRowIndex, csrColIndex, lambda, m, f, thetaT);				
+					(batch_offset, (half2*) tt, csrRowIndex, csrColIndex, lambda, m, f, thetaT);	
+					//#ifdef CUMF_SAVE_MODEL
+					//saveDeviceFloatArrayToFile(std::string("./log/cg-xx16-tt16.") + std::to_string(iter),  f * f * batch_size/2, tt);
+					//#endif					
 				#else
 				get_hermitian100<<<batch_size, 64, SCAN_BATCH * f/2*sizeof(float2)>>>
 					(batch_offset, tt, csrRowIndex, csrColIndex, lambda, m, f, thetaT);
-
+					//#ifdef CUMF_SAVE_MODEL
+					//saveDeviceFloatArrayToFile(std::string("./log/0826/lu4-tt32.") + std::to_string(iter),  f * f * batch_size, tt);
+					//#endif
 				//This commented out is the fused kernel
 				//performance not good due to register pressure and low occupancy
 				//alsUpdateFeature100Host
@@ -972,16 +998,16 @@ float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const 
 			printf("\tupdate X kernel run %f seconds, gridSize: %d, blockSize %d.\n", seconds() - t1, batch_size, f);
 			t1 = seconds();
 			#endif
-			#ifdef USE_CG
+			#ifdef USE_CG	//use CG iterative solver
 				#ifdef CUMF_TT_FP16
 				//cg_iter = als_iter: solve more carefully in later ALS iterations
 				printf("CG solver with fp16.\n");
 				updateXWithCGHost_tt_fp16(tt, &XT[batch_offset*f], &ythetaT[batch_offset*f], batch_size, f, CG_ITER);
 				#else
 				printf("CG solver with fp32.\n");
-				updateXWithCGHost(tt, &XT[batch_offset*f], &ythetaT[batch_offset*f], batch_size, f, 6);
+				updateXWithCGHost(tt, &XT[batch_offset*f], &ythetaT[batch_offset*f], batch_size, f, CG_ITER);
 				#endif
-			#else
+			#else//use LU solver instead
 			//host pointers for cublas batch operations
 			float ** devPtrTTHost = 0;
 			cudacall(cudaMallocHost( (void** ) &devPtrTTHost, batch_size * sizeof(*devPtrTTHost) ) );
@@ -1089,7 +1115,10 @@ float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const 
 				updateXWithCGHost_tt_fp16(xx, &thetaT[batch_offset*f], &yTXT[batch_offset*f], batch_size, f, CG_ITER);
 				#else
 				printf("CG solver with fp32.\n");
-				updateXWithCGHost(xx, &thetaT[batch_offset*f], &yTXT[batch_offset*f], batch_size, f, 6);
+				updateXWithCGHost(xx, &thetaT[batch_offset*f], &yTXT[batch_offset*f], batch_size, f, CG_ITER);
+					#ifdef CUMF_SAVE_MODEL
+					saveDeviceFloatArrayToFile(std::string("./log/0827/cg-xx32.iter") + std::to_string(iter) + std::string(".batch") + std::to_string(batch_id),  f * f * batch_size, xx);
+					#endif				
 				#endif
 			#else
 			float ** devPtrXXHost = 0;
@@ -1098,6 +1127,9 @@ float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const 
 			cudacall(cudaMallocHost( (void** ) &devPtrYTXTHost, batch_size * sizeof(*devPtrYTXTHost) ) );
 			updateTheta(batch_size, batch_offset, xx, yTXT, thetaT, handle, m,  n,  f,  nnz,
 					devPtrXXHost, devPtrYTXTHost);
+			#ifdef CUMF_SAVE_MODEL
+			saveDeviceFloatArrayToFile(std::string("./log/0827/lu-xx32.iter") + std::to_string(iter) + std::string(".batch") + std::to_string(batch_id),  f * f * batch_size, xx);
+			#endif				
 			cudacall(cudaFreeHost(devPtrXXHost));
 			cudacall(cudaFreeHost(devPtrYTXTHost));
 			#endif

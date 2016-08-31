@@ -46,6 +46,7 @@ __global__ void updateXWithCGKernel(float * A, float * x, float * b, const int b
 
 	//sharedx<--x
 	sharedx[threadIdx.x] = x[blockIdx.x*blockDim.x + threadIdx.x];
+	//sharedx[threadIdx.x] = 0;
 	__syncthreads();
 	//r=b-A*x;
 	float temp = 0;

@@ -47,7 +47,7 @@ NVCC := $(CUDA_PATH)/bin/nvcc -ccbin $(GCC)
 
 # internal flags
 
-NVCCFLAGS   := -m${OS_SIZE} ${ARCH_FLAGS} #--ptxas-options=-v --maxrregcount 255
+NVCCFLAGS   := -m${OS_SIZE} ${ARCH_FLAGS} -std=c++11 #--ptxas-options=-v --maxrregcount 255
 CCFLAGS     := -DADD_
 LDFLAGS     :=
 

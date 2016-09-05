@@ -116,7 +116,6 @@ HOST_COMPILER ?= g++
 NVCC          := $(CUDA_PATH)/bin/nvcc -ccbin $(HOST_COMPILER)
 
 # internal flags
-
 NVCCFLAGS   := -m${TARGET_SIZE} ${ARCH_FLAGS} -std=c++11 #--ptxas-options=-v --maxrregcount 255
 CCFLAGS     := -DADD_
 LDFLAGS     :=

@@ -1135,6 +1135,9 @@ float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const 
 			cudacall(cudaMallocHost( (void** ) &devPtrYTXTHost, batch_size * sizeof(*devPtrYTXTHost) ) );
 			updateTheta(batch_size, batch_offset, xx, yTXT, thetaT, handle, m,  n,  f,  nnz,
 					devPtrXXHost, devPtrYTXTHost);
+			#ifdef CUMF_SAVE_MODEL
+			saveDeviceFloatArrayToFile(std::string("./log/0827/lu-xx32.iter") + std::to_string(iter) + std::string(".batch") + std::to_string(batch_id),  f * f * batch_size, xx);
+			#endif				
 			cudacall(cudaFreeHost(devPtrXXHost));
 			cudacall(cudaFreeHost(devPtrYTXTHost));
 			#endif

@@ -30,7 +30,7 @@ We modified Spark's ml/recommendation/als.scala ([code](https://github.com/wei-t
 
 <img src=https://github.com/wei-tan/CUDA-MLlib/raw/master/als/images/spark-gpu.png width=380 height=240 />
 
-This approach has several advantages. First, existing apps relying on mllib/ALS need no change. Second, we leverage the best of Spark (to scale-out to multiple nodes) and GPU (to scale-up in one node). Check this GitHub [project](https://github.com/wei-tan/CUDA-MLlib/tree/master/als) for more details.
+This approach has several advantages. First, existing apps relying on mllib/ALS need no change. Second, we leverage the best of Spark (to scale-out to multiple nodes) and GPU (to scale-up in one node). Check this GitHub [project](https://github.com/wei-tan/CUDA-MLlib/tree/master/als) for more details. It is also a part of [IBM packages for Apache Spark version 2](http://www-01.ibm.com/support/docview.wss?uid=swg21983421).
 
 ## Build
 
@@ -38,7 +38,7 @@ Type:
 
 	make clean build
 
-To see debug message, such as run-time in each step, type:
+To see debug message, such as the run-time of each step, type:
 
 	make clean debug
 
@@ -68,7 +68,7 @@ Usage: give M, N, F, NNZ, NNZ_TEST, lambda, X_BATCH, THETA_BATCH and DATA_DIR.
 
 E.g., for netflix data set, use:
 
-	./main 17770 480189 100 99072112 1408395 0.058 1 3 ./data/netflix/
+	./main 17770 480189 100 99072112 1408395 0.048 1 3 ./data/netflix/
 	
 E.g., for movielens 10M data set, use:
 
@@ -76,11 +76,27 @@ E.g., for movielens 10M data set, use:
 	
 E.g., for yahooMusic data set, use:
 
-	./main 1000990 624961 100 252800275 4003960 1.1 6 3 ./data/yahoo/
+	./main 1000990 624961 100 252800275 4003960 1.4 6 3 ./data/yahoo/
 
 Prepare the data as instructed in the previous section, before you run.
 
 Note: rank value F has to be a multiply of 10, e.g., 10, 50, 100, 200. 
+
+## Performance Optimization
+
+### Conjugate Gradient Solver
+
+CuMF offers two solvers:
+
+(1) Direct LU solver provided by cuBLAS (http://docs.nvidia.com/cuda/cublas/#cublas-lt-t-gt-getrfbatched). It requires O(n^3) computation and also the implementation on GPU is slow.
+
+(2) Conjugate gradient method (https://en.wikipedia.org/wiki/Conjugate_gradient_method). We implement our own CG kernel. 
+
+You can use the CG instead of the LU solver, by uncomment #define USE_CG in als.cu.
+
+### Half Precision (FP16)
+
+The CG solver can use FP16 to store the left-hand square matrix. Since the CG solver is memory-bound, this can further improve performance.
 
 ## Known Issues
 We are trying to improve the usability, stability and performance. Here are some known issues we are working on:

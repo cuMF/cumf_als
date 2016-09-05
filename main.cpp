@@ -16,41 +16,16 @@
 #define DEVICEID 0
 #define ITERS 10
 
-/*
-//netflix standard data
-#define M 17770
-#define N 480189
-#define NNZ 99072112
-#define NNZ_TEST 1408395
-#define X_BATCH 1
-*/
-
-//lambda: K40 and Maxwell: 0.055
-//K80: needs 0.06
-
-/*
-//yahoo data
-#define M 1000990
-#define N 624961
-#define NNZ 252800275
-#define NNZ_TEST 4003960
-//1.2 on K40, Maxwell
-//need to be 2.0+ on K80
-#define LAMBDA 1.1
-#define THETA_BATCH 3
-#define X_BATCH 6
-*/
-
 int main(int argc, char **argv) {
 	//parse input parameters
 	if(argc != 10){
 		printf("Usage: give M, N, F, NNZ, NNZ_TEST, lambda, X_BATCH, THETA_BATCH and DATA_DIR.\n");
 		printf("E.g., for netflix data set, use: \n");
-		printf("./main 17770 480189 100 99072112 1408395 0.058 1 3 ./data/netflix/ \n");
+		printf("./main 17770 480189 100 99072112 1408395 0.048 1 3 ./data/netflix/ \n");
 		printf("E.g., for movielens 10M data set, use: \n");
 		printf("./main 71567 65133 100 9000048 1000006 0.05 1 1 ./data/ml10M/ \n");
 		printf("E.g., for yahooMusic data set, use: \n");
-		printf("./main 1000990 624961 100 252800275 4003960 1.1 6 3 ./data/yahoo/ \n");
+		printf("./main 1000990 624961 100 252800275 4003960 1.4 6 3 ./data/yahoo/ \n");
 		return 0;
 	}
 	
@@ -97,14 +72,10 @@ int main(int argc, char **argv) {
 	unsigned int seed = 10;
 	srand (seed);
 	for (int k = 0; k < n * f; k++)
-		//netflix standard
-		thetaTHost[k] = 0.05*((float) rand() / (RAND_MAX)) - 0.35;
-		//yahoo
-		//thetaTHost[k] = 3.0*((float) rand() / (RAND_MAX)) - 1.0f;
+		thetaTHost[k] = 0.1*((float) rand() / (float)RAND_MAX);
 	//CG needs to initialize X as well
 	for (int k = 0; k < m * f; k++)
-		//netflix standard
-		XTHost[k] = 0.05*((float) rand() / (RAND_MAX)) - 0.35;
+		XTHost[k] = 0;//0.1*((float) rand() / (float)RAND_MAX);;
 	printf("*******start loading training and testing sets to host.\n");
 	//testing set
 	int* cooRowIndexTestHostPtr = (int *) malloc(

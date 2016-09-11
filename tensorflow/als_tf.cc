@@ -118,16 +118,19 @@ class DoAlsOp : public OpKernel {
 	auto rmse = rmse_tensor->template flat<float>();
 	//initiate feature vector
 	float* thetat_array = thetat.data();
+	float* xt_array = xt.data();
 	for (int k = 0; k < n * f; k++)
-		//netflix standard
-		thetat_array[k] = 0.05*((float) rand() / (RAND_MAX)) - 0.35;
+		thetat_array[k] = 0.1*((float) rand() / (float)RAND_MAX);
+	//CG needs to initialize X as well
+	for (int k = 0; k < m * f; k++)
+		xt_array[k] = 0;
 
 	// Call the cuda kernel launcher
 	const int size = cscrow.size();
 	printf("cscrow size: %d \n", size);
     //DoALSKernelLauncher(csrrow.data(), csrcol.data(), csrval.data(), thetat_array, xt.data(), N, nnz);
 	rmse(0) = doALS(csrrow.data(), csrcol.data(), csrval.data(), cscrow.data(), csccol.data(), cscval.data(),
-		coorow.data(), thetat_array, xt.data(),
+		coorow.data(), thetat_array, xt_array,
 		coorowtest.data(), coocoltest.data(), coovaltest.data(),
 		m, n, f, nnz, nnztest, lambda,
 		iters, xbatch, thetabatch, deviceid);

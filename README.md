@@ -51,7 +51,7 @@ For Netflix data, type:
     cd ./data/netflix/
     python ./prepare_netflix_data.py
 
-Note: this can take 30+ minutes. You can download this [file](https://ibm.box.com/shared/static/5vmh77up8reodvihiq0ri66jltg9h4uh.tar) from your brower, extract and put the extracted files in ./data/netflix directly.
+Note: this can take 30+ minutes. You can download this [file](https://ibm.box.com/shared/static/5vmh77up8reodvihiq0ri66jltg9h4uh.tar) from your brower, extract and put the extracted files in [./data/netflix](./data/netflix) directly.
 
 For Movielens:
 
@@ -85,11 +85,11 @@ Note: rank value F has to be a multiple of 10, e.g., 10, 50, 100, 200.
 
 ### Large-Scale Problems
 
-For Netflix data set, you need to adjust the number of batches to solve X (movie features) and Theta (user features). When F is 100, we set X_BATCH and THETA_BATCH to 1 and 3, respectively. Check test_als.sh for the reference settings for different F values.
+For Netflix data, you need to adjust the number of batches to solve X (movie features) and Theta (user features). When F is 100, we set X_BATCH and THETA_BATCH to 1 and 3, respectively. Check test_als.sh for the reference settings for different F values.
 
 Note: we checked these settings on Kepler, Maxwell and Pascal GPU cards where there is more than 12 GB RAM. If you have cards with small memory capacity, you need to increase X_BATCH and THETA_BATCH to run more (smaller) batches.
 
-Directory /hugewiki contains the code to solve the much larger hugewiki data set. Read Section 4 of our paper (http://arxiv.org/abs/1603.03820) for more details.
+Directory [hugewiki](./hugewiki) contains the code to solve the much larger hugewiki data set. Read Section 4 of our [paper] (http://arxiv.org/abs/1603.03820) for more details.
 
 ## Performance Optimization
 
@@ -101,7 +101,7 @@ CuMF offers two solvers:
 
 (2) Conjugate gradient method (https://en.wikipedia.org/wiki/Conjugate_gradient_method). We implement our own CG kernel. 
 
-You can use the CG instead of the LU solver, by uncomment #define USE_CG in als.cu.
+You can use the CG instead of the LU solver, by uncomment #define USE_CG in [als.cu](./als.cu).
 
 ### Half Precision (FP16)
 

@@ -642,38 +642,38 @@ get_hermitian100(const int batch_offset, float2* tt,
 					memset(&thetaTemp[threadIdx.x*F/2], 0, F*sizeof(float));
 			}
 */
-
-			//two layers: warp divergence unless we split at 32
-			//require 32 >= SCAN_BATCH
-			if(threadIdx.x < 2*32 ){
-				//int index = threadIdx.x;
-				int index = threadIdx.x - (threadIdx.x/32)*32;	//0 to 31;
-				if(index < SCAN_BATCH){
-					if(iter*SCAN_BATCH + index < end - start){
-						//for (int k = 50*(threadIdx.x/32); k < 50*(threadIdx.x/32) + 50; k += 2){
-						//IMPORTANT: for loop has constant and identical start and end
-						if(threadIdx.x < 32){
-							for (int k = 0; k < 50; k += 2){
-								theta.x = __ldg(&thetaT[ F * csrColIndex[start + iter*SCAN_BATCH + index] + k]);
-								theta.y = __ldg(&thetaT[ F * csrColIndex[start + iter*SCAN_BATCH + index] + k+1]);
-								thetaTemp[index * F/2 + k/2] = theta;
-							}
-						}
-						else {
-							for (int k = 0; k < 50; k += 2){
-								theta.x = __ldg(&thetaT[ F * csrColIndex[start + iter*SCAN_BATCH + index] + k + 50]);
-								theta.y = __ldg(&thetaT[ F * csrColIndex[start + iter*SCAN_BATCH + index] + k + 51]);
-								thetaTemp[index * F/2 + k/2 + 25] = theta;
-							}
+			/*
+			This choice is the fastest, even thetaT is NOT coalesced loaded
+			one two threads per theta column, e.g., threads 0 & 32 for theta[0]
+			two layers: warp divergence unless we split at 32
+			require 32 >= SCAN_BATCH
+			*/
+			//int index = threadIdx.x - (threadIdx.x/32)*32;	//0 to 31;
+			int index = threadIdx.x % 32;
+			if(threadIdx.x < 2*32 && index < SCAN_BATCH){
+				int anchor = start + iter*SCAN_BATCH + index;
+				if(anchor < end){
+					//IMPORTANT: for loop has constant and identical start and end
+					int col = csrColIndex[anchor];
+					if(threadIdx.x < 32){
+						for (int k = 0; k < 50; k += 2){
+							theta.x = __ldg(&thetaT[ F * col + k]);
+							theta.y = __ldg(&thetaT[ F * col + k+1]);
+							thetaTemp[index * F/2 + k/2] = theta;
 						}
 					}
-					//must be the last iteration; no need to check
-					//not enough theta to copy, set zero
-					else
-						memset(&thetaTemp[index*F/2], 0, F*sizeof(float));
+					else {
+						for (int k = 0; k < 50; k += 2){
+							theta.x = __ldg(&thetaT[ F * col + k + 50]);
+							theta.y = __ldg(&thetaT[ F * col + k + 51]);
+							thetaTemp[index * F/2 + k/2 + 25] = theta;
+						}
+					}
 				}
+				//must be the last iteration; no need to check
+				else
+					memset(&thetaTemp[index*F/2], 0, F*sizeof(float));		
 			}
-
 
 /*			//issue: not coalesced access to csrColIndex
 			if(threadIdx.x < F && threadIdx.x%2 == 0){

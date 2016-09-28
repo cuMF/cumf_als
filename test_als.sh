@@ -1,6 +1,6 @@
 #!/bin/bash
 #$1 should be a directory
-make clean build
+make clean debug build
 mkdir $1
 ./main 17770 480189 10 99072112 1408395 0.048 1 1 ./data/netflix/ > $1/als.10
 ./main 17770 480189 20 99072112 1408395 0.048 1 1 ./data/netflix/ > $1/als.20

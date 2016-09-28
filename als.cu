@@ -593,6 +593,7 @@ get_hermitian100(const int batch_offset, float2* tt,
 		const int* csrRowIndex, const int* csrColIndex, const float lambda, const int m, const int F,
 		const float* __restrict__ thetaT) {
 	extern __shared__ float2 thetaTemp[];
+	//float* thetaTemp_float = (float*)thetaTemp;
 	int row = blockIdx.x + batch_offset;
 	if (row < m) {
 		//this block needs to handle end - start thetaT columns
@@ -648,6 +649,7 @@ get_hermitian100(const int batch_offset, float2* tt,
 			two layers: warp divergence unless we split at 32
 			require 32 >= SCAN_BATCH
 			*/
+
 			//int index = threadIdx.x - (threadIdx.x/32)*32;	//0 to 31;
 			int index = threadIdx.x % 32;
 			if(threadIdx.x < 2*32 && index < SCAN_BATCH){
@@ -671,10 +673,10 @@ get_hermitian100(const int batch_offset, float2* tt,
 					}
 				}
 				//must be the last iteration; no need to check
-				else
-					memset(&thetaTemp[index*F/2], 0, F*sizeof(float));		
+				//else
+				//	memset(&thetaTemp[index*F/2], 0, F*sizeof(float));		
 			}
-
+			
 /*			//issue: not coalesced access to csrColIndex
 			if(threadIdx.x < F && threadIdx.x%2 == 0){
 				for(int k = 0; k< SCAN_BATCH; k++){
@@ -690,6 +692,23 @@ get_hermitian100(const int batch_offset, float2* tt,
 				}
 			}
 */
+/*		
+		//coalesced read from thetaT: WHY it is slower?
+			if(threadIdx.x < F/2){
+				for(int k = 0; k< SCAN_BATCH; k++){
+					int anchor = start + iter*SCAN_BATCH + k;
+					if(anchor < end){
+						int col = csrColIndex[anchor];
+						theta.x = thetaT[ F * col + 2*threadIdx.x];
+						theta.y = thetaT[ F * col + 2*threadIdx.x+1];
+						thetaTemp[k * F/2 + threadIdx.x] = theta;
+					}
+					else
+						memset(&thetaTemp[k*F/2 + threadIdx.x], 0, 2*sizeof(float));
+				}
+			}
+			
+*/			
 /*
 			int layers = blockDim.x/SCAN_BATCH;	//100/30 = 3
 			//int height = blockDim.x/layers; //30
@@ -717,10 +736,16 @@ get_hermitian100(const int batch_offset, float2* tt,
 			__syncthreads();
 
 			//tile: 10*10
-			if(threadIdx.x < 55 ){
-				for(int k = 0; k < SCAN_BATCH; k++){
-					accumulate_in_registers();
+			if(threadIdx.x < 55){
+				if(iter < iterations - 1){
+					for(int k = 0; k < SCAN_BATCH; k++)
+						accumulate_in_registers();
 				}
+				else{
+					for(int k = 0; k < end - start - iter*SCAN_BATCH; k++)
+						accumulate_in_registers();
+				}
+				
 			}
 		}
 		//end of iteration in copying from smem and aggregating in register
@@ -1012,10 +1037,10 @@ float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const 
 			#ifdef USE_CG	//use CG iterative solver
 				#ifdef CUMF_TT_FP16
 				//cg_iter = als_iter: solve more carefully in later ALS iterations
-				printf("CG solver with fp16.\n");
+				printf("\tCG solver with fp16.\n");
 				updateXWithCGHost_tt_fp16(tt, &XT[batch_offset*f], &ythetaT[batch_offset*f], batch_size, f, CG_ITER);
 				#else
-				printf("CG solver with fp32.\n");
+				printf("\tCG solver with fp32.\n");
 				updateXWithCGHost(tt, &XT[batch_offset*f], &ythetaT[batch_offset*f], batch_size, f, CG_ITER);
 				#endif
 			#else//use LU solver instead
@@ -1035,7 +1060,7 @@ float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const 
 			cudacall(cudaFree(tt));
 		}
 		#ifdef DEBUG
-		printf("ALS update X run %f seconds, gridSize: %d, blockSize %d.\n", seconds() - t0, m, f);
+		printf("update X run %f seconds, gridSize: %d, blockSize %d.\n", seconds() - t0, m, f);
 		#endif
 		cudacall(cudaFree(csrRowIndex));
 		cudacall(cudaFree(csrColIndex));
@@ -1122,10 +1147,10 @@ float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const 
 			#endif
 			#ifdef USE_CG
 				#ifdef CUMF_XX_FP16
-				printf("CG solver with fp16.\n");
+				printf("\tCG solver with fp16.\n");
 				updateXWithCGHost_tt_fp16(xx, &thetaT[batch_offset*f], &yTXT[batch_offset*f], batch_size, f, CG_ITER);
 				#else
-				printf("CG solver with fp32.\n");
+				printf("\tCG solver with fp32.\n");
 				updateXWithCGHost(xx, &thetaT[batch_offset*f], &yTXT[batch_offset*f], batch_size, f, CG_ITER);
 				#endif
 			#else

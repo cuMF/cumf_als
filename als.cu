@@ -588,7 +588,7 @@ get_hermitian100_tt_fp16(const int batch_offset, half2* tt,
 }
 
 __global__ void
-__launch_bounds__(64, 6)
+__launch_bounds__(55)
 get_hermitian100(const int batch_offset, float2* tt,
 		const int* csrRowIndex, const int* csrColIndex, const float lambda, const int m, const int F,
 		const float* __restrict__ thetaT) {
@@ -649,34 +649,25 @@ get_hermitian100(const int batch_offset, float2* tt,
 			two layers: warp divergence unless we split at 32
 			require 32 >= SCAN_BATCH
 			*/
-
-			//int index = threadIdx.x - (threadIdx.x/32)*32;	//0 to 31;
-			int index = threadIdx.x % 32;
-			if(threadIdx.x < 2*32 && index < SCAN_BATCH){
-				int anchor = start + iter*SCAN_BATCH + index;
+///*
+			//require: threadIdx.x >= 2*SCAN_BATCH
+			//e.g., threads 0 & 1 for theta[0], threads 2 & 3 for theta[1]
+			if(threadIdx.x < 2*SCAN_BATCH){
+				int anchor = start + iter*SCAN_BATCH + threadIdx.x/2;
 				if(anchor < end){
 					//IMPORTANT: for loop has constant and identical start and end
 					int col = csrColIndex[anchor];
-					if(threadIdx.x < 32){
-						for (int k = 0; k < 50; k += 2){
-							theta.x = __ldg(&thetaT[ F * col + k]);
-							theta.y = __ldg(&thetaT[ F * col + k+1]);
-							thetaTemp[index * F/2 + k/2] = theta;
-						}
-					}
-					else {
-						for (int k = 0; k < 50; k += 2){
-							theta.x = __ldg(&thetaT[ F * col + k + 50]);
-							theta.y = __ldg(&thetaT[ F * col + k + 51]);
-							thetaTemp[index * F/2 + k/2 + 25] = theta;
-						}
+					for (int k = 0; k < 50; k += 2){
+						theta.x = __ldg(&thetaT[ F * col + threadIdx.x%2*F/2 + k]);
+						theta.y = __ldg(&thetaT[ F * col + threadIdx.x%2*F/2 + k+1]);
+						thetaTemp[threadIdx.x*F/4 + k/2] = theta;						
 					}
 				}
 				//must be the last iteration; no need to check
 				//else
 				//	memset(&thetaTemp[index*F/2], 0, F*sizeof(float));		
 			}
-			
+//*/			
 /*			//issue: not coalesced access to csrColIndex
 			if(threadIdx.x < F && threadIdx.x%2 == 0){
 				for(int k = 0; k< SCAN_BATCH; k++){
@@ -698,13 +689,16 @@ get_hermitian100(const int batch_offset, float2* tt,
 				for(int k = 0; k< SCAN_BATCH; k++){
 					int anchor = start + iter*SCAN_BATCH + k;
 					if(anchor < end){
+						//this read of csrColIndex is more than the optimized solution
+						//and is killing the performance
 						int col = csrColIndex[anchor];
-						theta.x = thetaT[ F * col + 2*threadIdx.x];
-						theta.y = thetaT[ F * col + 2*threadIdx.x+1];
+						//int col = 0;
+						theta.x = __ldg(&thetaT[ F * col + 2*threadIdx.x]);
+						theta.y = __ldg(&thetaT[ F * col + 2*threadIdx.x+1]);
 						thetaTemp[k * F/2 + threadIdx.x] = theta;
 					}
-					else
-						memset(&thetaTemp[k*F/2 + threadIdx.x], 0, 2*sizeof(float));
+					//else
+					//	memset(&thetaTemp[k*F/2 + threadIdx.x], 0, 2*sizeof(float));
 				}
 			}
 			
@@ -826,6 +820,7 @@ get_hermitianT10(const int batch_offset, float* tt,
 		//iteration: copy gmem-->smem; aggregate smem-->register
 		for (int iter = 0; iter < iterations; iter ++){
 			//phase 1 in iteration: gmem --> smem
+			
 			//REQ: blockDim.x >= F/2
 			if(threadIdx.x < F/2){
 				for(int k = 0; k< SCAN_BATCH; k++){
@@ -841,7 +836,7 @@ get_hermitianT10(const int batch_offset, float* tt,
 					else
 						memset(&thetaTemp[k*F/2 + threadIdx.x], 0, 2*sizeof(float));
 				}
-			}
+			}			
 			__syncthreads();
 			
 			//phase 2 in iteration: smem --> register
@@ -1014,7 +1009,7 @@ float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const 
 					saveDeviceFloatArrayToFile(std::string("./log/cg-xx16-tt16.") + std::to_string(iter),  f * f * batch_size/2, tt);
 					#endif					
 				#else
-				get_hermitian100<<<batch_size, 64, SCAN_BATCH * f/2*sizeof(float2)>>>
+				get_hermitian100<<<batch_size, 55, SCAN_BATCH * f/2*sizeof(float2)>>>
 					(batch_offset, (float2*)tt, csrRowIndex, csrColIndex, lambda, m, f, thetaT);
 					#ifdef CUMF_SAVE_MODEL
 					saveDeviceFloatArrayToFile(std::string("./log/0904/tt32.") + std::to_string(iter),  f * f * batch_size, tt);
@@ -1128,7 +1123,7 @@ float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const 
 				get_hermitian100_tt_fp16<<<batch_size, 64, SCAN_BATCH * f/2*sizeof(float2)>>>
 					(batch_offset, (half2*) xx, cscColIndex, cscRowIndex, lambda, n, f, XT);
 				#else
-				get_hermitian100<<<batch_size, 64, SCAN_BATCH * f/2*sizeof(float2)>>>
+				get_hermitian100<<<batch_size, 55, SCAN_BATCH * f/2*sizeof(float2)>>>
 					(batch_offset, (float2*)xx, cscColIndex, cscRowIndex, lambda, n, f, XT);
 				#endif
 			}

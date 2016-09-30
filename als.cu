@@ -22,11 +22,11 @@
  *  Alternating Least Square for Matrix Factorization on CUDA 7.0+
  *  Code optimized for F = 100, and on cc 3.5, 3.7 platforms. Also tested in cc 5.2
  */
-//do not use magma and fp16 by default  
-//#define CUMF_USE_MAGMA
+//do not use fp16 by default  
 //#define CUMF_USE_HALF
 //#define SURPASS_NAN
-#define USE_CG 
+#define USE_CG
+//if cojugate gradient solver generates results in FP16 
 //#define CUMF_TT_FP16
 //#define CUMF_XX_FP16
 #define CG_ITER 6
@@ -41,15 +41,8 @@
 #ifdef CUMF_USE_HALF
 #define SCAN_BATCH 24
 #else
-#define SCAN_BATCH 24
+#define SCAN_BATCH 28
 #endif
-#ifdef CUMF_USE_MAGMA
-#include "flops.h"
-#include "magma.h"
-#include "magma_lapack.h"
-#include "testings.h"
-#endif
-
 #include <iostream>
 using namespace std;
 
@@ -194,84 +187,6 @@ int updateTheta(const int batch_size, const int batch_offset, float * xx,
 	cudaFree(devPtrYTXT);
 	return 0;
 }
-
-#ifdef USE_MAGMA
-int updateThetaMagma(const int batch_size, const int batch_offset, float * xx,
-		  float * yTXT, float * thetaT,
-		cublasHandle_t handle,
-		 const int m, const int n, const int f, const int nnz,
-		 float ** devPtrXXHost, float **devPtrYTXTHost ){
-	//variables for timing
-	float elapsed;
-	struct timeval tv1, tv2;
-	gettimeofday(&tv1, NULL);
-	printf("*******magma Cholesky factorization.\n");
-	magma_init();
-	magma_opts opts( MagmaOptsBatched );
-	char *parray[10];
-	char **x;
-	x = &parray[0];
-	opts.parse_opts(1,x);
-	magma_queue_t queue = opts.queue;
-	int min_batch = batch_size;
-	int info = 0;
-	int * dinfo_array = 0;
-	float **dA_array = NULL; 
-	float **dB_array = NULL;
-	float **hA_array = (float**) malloc(min_batch * sizeof(hA_array[0]));
-	float **hB_array = (float**) malloc(min_batch * sizeof(hB_array[0]));	
-
-	cudacall (cudaMalloc((void**) &dinfo_array, min_batch*sizeof(int)));
-	cudacall(cudaMalloc((void** ) &dA_array, min_batch * sizeof(*dA_array)));
-	cudacall(cudaMalloc((void** ) &dB_array, min_batch * sizeof(*dB_array)));
-	for (int k = 0; k < batch_size; k++) {
-		hA_array[k] = &xx[k * f * f];
-		hB_array[k] = &yTXT[batch_offset * f + k * f];
-	}
-	cudacall(cudaMemcpy(dA_array, hA_array, min_batch * sizeof(*dA_array), cudaMemcpyHostToDevice));
-	cudacall(cudaMemcpy(dB_array, hB_array, min_batch * sizeof(*dB_array), cudaMemcpyHostToDevice));
-
-	info = magma_sposv_batched(MagmaLower, f, 1, dA_array, f, dB_array, f, dinfo_array, min_batch, queue);
-	magma_int_t *dipiv;
-	magma_int_t     **dipiv_array = NULL;
-	TESTING_MALLOC_DEV( dipiv, magma_int_t, f * min_batch );
-	TESTING_MALLOC_DEV( dipiv_array, magma_int_t*,     min_batch );
-	magma_iset_pointer( dipiv_array, dipiv, 1, 0, 0, f, min_batch, queue );
-
-	//info = magma_sgesv_nopiv_batched(f, 1, dA_array, f, dB_array, f, dinfo_array, min_batch, queue);
-    //info = magma_sgesv_batched(f, 1, dA_array, f, dipiv_array, dB_array, f, dinfo_array, min_batch, queue);
-
-	int *cpu_info = (int*) malloc(min_batch*sizeof(int));
-	cudacall(cudaMemcpy(cpu_info, dinfo_array, min_batch * sizeof(int),cudaMemcpyDeviceToHost));
-
-	cudacall( cudaMemcpy(&thetaT[batch_offset * f], &yTXT[batch_offset * f],
-			batch_size * f * sizeof(float), cudaMemcpyDeviceToDevice) );
-	
-	for(int i = 0; i < min_batch; i++){
-		if(cpu_info[i] != 0 ){
-			printf("magma_sposv_batched matrix %d returned internal error %d\n",i, (int)cpu_info[i] );
-		}
-	}
-	if (info != 0)
-		printf("magma_sposv_batched returned argument error %d: %s.\n", (int) info, magma_strerror( info ));
-	
-	cudaFree(dA_array);
-	cudaFree(dB_array);
-	cudaFree( dinfo_array );
-	cudaFree(dipiv_array);
-	cudaFree(dipiv);
-	free(cpu_info);
-	free(hA_array);
-	free(hB_array);
-	//free(x);
-	magma_finalize();
-	gettimeofday(&tv2, NULL);
-	elapsed = (tv2.tv_sec - tv1.tv_sec)
-			+ (tv2.tv_usec - tv1.tv_usec) / 1000000.0;
-	printf("\t %f seconds. \n", elapsed);
-	return 0;
-}
-#endif
 
 __global__ void RMSE(const float * csrVal, const int* cooRowIndex,
 		const int* csrColIndex, const float * __restrict__ thetaT, const float * __restrict__ XT, float * error, const int nnz,
@@ -588,12 +503,11 @@ get_hermitian100_tt_fp16(const int batch_offset, half2* tt,
 }
 
 __global__ void
-__launch_bounds__(55)
+__launch_bounds__(64)
 get_hermitian100(const int batch_offset, float2* tt,
 		const int* csrRowIndex, const int* csrColIndex, const float lambda, const int m, const int F,
-		const float* __restrict__ thetaT) {
+		const float2* __restrict__ thetaT) {
 	extern __shared__ float2 thetaTemp[];
-	//float* thetaTemp_float = (float*)thetaTemp;
 	int row = blockIdx.x + batch_offset;
 	if (row < m) {
 		//this block needs to handle end - start thetaT columns
@@ -626,106 +540,44 @@ get_hermitian100(const int batch_offset, float2* tt,
 		}
 		//iteration: copy gmem-->smem; aggregate smem-->register
 		for (int iter = 0; iter < iterations; iter ++){
-			float2 theta;
 			//copy texture --> smem, and sync
-/*
-			if(threadIdx.x < SCAN_BATCH){
-				if(iter*SCAN_BATCH + threadIdx.x < end - start){
-					for (int k = 0; k < F; k += 2){
-						theta.x = tex1Dfetch(thetaTTexRef, F * csrColIndex[start + iter*SCAN_BATCH + threadIdx.x] + k);
-						theta.y = tex1Dfetch(thetaTTexRef, F * csrColIndex[start + iter*SCAN_BATCH + threadIdx.x] + k+1);
-						thetaTemp[threadIdx.x * F/2 + k/2] = theta;
-					}
-				}
-				//must be the last iteration; no need to check
-				//not enough theta to copy, set zero
-				else
-					memset(&thetaTemp[threadIdx.x*F/2], 0, F*sizeof(float));
-			}
-*/
 			/*
-			This choice is the fastest, even thetaT is NOT coalesced loaded
-			one two threads per theta column, e.g., threads 0 & 32 for theta[0]
-			two layers: warp divergence unless we split at 32
-			require 32 >= SCAN_BATCH
+			This is the fastest implementation
+			thetaT is NOT coalesced loaded but cached by L1 and L2
+			faster than coalesced version (see the next paragraph commented out) 
+			because it concurrently load multiple thetaT columns
+			two threads per theta column, e.g., threads 0 & 1 for theta[0], threads 2 & 3 for theta[1]
+			require: blockDim.x (64) >= 2*SCAN_BATCH
 			*/
-///*
-			//require: threadIdx.x >= 2*SCAN_BATCH
-			//e.g., threads 0 & 1 for theta[0], threads 2 & 3 for theta[1]
+///* 
 			if(threadIdx.x < 2*SCAN_BATCH){
 				int anchor = start + iter*SCAN_BATCH + threadIdx.x/2;
 				if(anchor < end){
-					//IMPORTANT: for loop has constant and identical start and end
 					int col = csrColIndex[anchor];
-					for (int k = 0; k < 50; k += 2){
-						theta.x = __ldg(&thetaT[ F * col + threadIdx.x%2*F/2 + k]);
-						theta.y = __ldg(&thetaT[ F * col + threadIdx.x%2*F/2 + k+1]);
-						thetaTemp[threadIdx.x*F/4 + k/2] = theta;						
-					}
+					//IMPORTANT: for loop has constant and identical start and end
+					for (int k = 0; k < 50; k += 2)
+						thetaTemp[threadIdx.x*F/4 + k/2] =__ldg(&thetaT[ F/2 * col + threadIdx.x%2*F/4 + k/2]);
 				}
-				//must be the last iteration; no need to check
-				//else
-				//	memset(&thetaTemp[index*F/2], 0, F*sizeof(float));		
 			}
 //*/			
-/*			//issue: not coalesced access to csrColIndex
-			if(threadIdx.x < F && threadIdx.x%2 == 0){
-				for(int k = 0; k< SCAN_BATCH; k++){
-					if(iter*SCAN_BATCH + k < end - start){
-						theta.x = tex1Dfetch(thetaTTexRef, F * csrColIndex[start + iter*SCAN_BATCH + k] + threadIdx.x);
-						theta.y = tex1Dfetch(thetaTTexRef, F * csrColIndex[start + iter*SCAN_BATCH + k] + threadIdx.x +1);
-						thetaTemp[k * F/2 + threadIdx.x/2] = theta;
-					}
-					//must be the last iteration; no need to check
-					//not enough theta to copy, set zero
-					else
-						memset(&thetaTemp[k*F/2 + threadIdx.x/2], 0, 2*sizeof(float));
+
+/*			
+				//coalesced load thetaT, has to load column by column, less concurrency, worse performance
+				int anchor = start + iter*SCAN_BATCH + threadIdx.x%32;
+				int col_local;
+				if(anchor < end && threadIdx.x%32 < SCAN_BATCH)
+					col_local = csrColIndex[anchor];
+				int stop = (end - start - iter*SCAN_BATCH < SCAN_BATCH)? end - start - iter*SCAN_BATCH: SCAN_BATCH;
+				for (int k = 0; k < stop; k++){
+					//deal with col_local in lane[k]
+					int col = __shfl(col_local, k);
+					//if(blockIdx.x==0 && threadIdx.x==0)
+					//	printf("iter=%d,k=%d,col=%d,stop=%d,anchor=%d\n", iter,k, col, stop, anchor);
+					//this type of for is bad in performance
+					//for(int i = threadIdx.x; i < F; i += 64)
+					if(threadIdx.x<F/2)
+						thetaTemp[k*F/2 + threadIdx.x] = __ldg(&thetaT[ F/2 * col + threadIdx.x]);
 				}
-			}
-*/
-/*		
-		//coalesced read from thetaT: WHY it is slower?
-			if(threadIdx.x < F/2){
-				for(int k = 0; k< SCAN_BATCH; k++){
-					int anchor = start + iter*SCAN_BATCH + k;
-					if(anchor < end){
-						//this read of csrColIndex is more than the optimized solution
-						//and is killing the performance
-						int col = csrColIndex[anchor];
-						//int col = 0;
-						theta.x = __ldg(&thetaT[ F * col + 2*threadIdx.x]);
-						theta.y = __ldg(&thetaT[ F * col + 2*threadIdx.x+1]);
-						thetaTemp[k * F/2 + threadIdx.x] = theta;
-					}
-					//else
-					//	memset(&thetaTemp[k*F/2 + threadIdx.x], 0, 2*sizeof(float));
-				}
-			}
-			
-*/			
-/*
-			int layers = blockDim.x/SCAN_BATCH;	//100/30 = 3
-			//int height = blockDim.x/layers; //30
-			int y = threadIdx.x/SCAN_BATCH;//0,1,2,3; y==3 is not viable
-			//min(y, (layers-1)) * height
-			int y_start = y * 30;//0-29:0;30-59:30;60-89:60
-			int y_end = y_start + 30;	//0-29:30;30-59:60;60-89:90
-			if(y >= layers - 1) y_end = F;	//60-89:100
-			if(threadIdx.x - y_start < SCAN_BATCH){
-				if(iter*SCAN_BATCH + (threadIdx.x - y_start) < end - start){
-					for (int k = y_start; k < y_end; k += 2){
-						theta.x =
-								tex1Dfetch(thetaTTexRef, F * csrColIndex[start + iter*SCAN_BATCH + (threadIdx.x - y_start)] + k);
-						theta.y =
-								tex1Dfetch(thetaTTexRef, F * csrColIndex[start + iter*SCAN_BATCH + (threadIdx.x - y_start)] + k+1);
-						thetaTemp[(threadIdx.x - y_start)* F/2 + k/2] = theta;
-					}
-				}
-				//must be the last iteration; no need to check
-				//not enough theta to copy, set zero
-				else
-					memset(&thetaTemp[(threadIdx.x - y_start)*F/2 + y_start/2], 0, (y_end - y_start)*sizeof(float));
-			}
 */
 			__syncthreads();
 
@@ -1009,8 +861,8 @@ float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const 
 					saveDeviceFloatArrayToFile(std::string("./log/cg-xx16-tt16.") + std::to_string(iter),  f * f * batch_size/2, tt);
 					#endif					
 				#else
-				get_hermitian100<<<batch_size, 55, SCAN_BATCH * f/2*sizeof(float2)>>>
-					(batch_offset, (float2*)tt, csrRowIndex, csrColIndex, lambda, m, f, thetaT);
+				get_hermitian100<<<batch_size, 64, SCAN_BATCH * f/2*sizeof(float2)>>>
+					(batch_offset, (float2*)tt, csrRowIndex, csrColIndex, lambda, m, f, (float2*)thetaT);
 					#ifdef CUMF_SAVE_MODEL
 					saveDeviceFloatArrayToFile(std::string("./log/0904/tt32.") + std::to_string(iter),  f * f * batch_size, tt);
 					#endif
@@ -1123,8 +975,8 @@ float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const 
 				get_hermitian100_tt_fp16<<<batch_size, 64, SCAN_BATCH * f/2*sizeof(float2)>>>
 					(batch_offset, (half2*) xx, cscColIndex, cscRowIndex, lambda, n, f, XT);
 				#else
-				get_hermitian100<<<batch_size, 55, SCAN_BATCH * f/2*sizeof(float2)>>>
-					(batch_offset, (float2*)xx, cscColIndex, cscRowIndex, lambda, n, f, XT);
+				get_hermitian100<<<batch_size, 64, SCAN_BATCH * f/2*sizeof(float2)>>>
+					(batch_offset, (float2*)xx, cscColIndex, cscRowIndex, lambda, n, f, (float2*)XT);
 				#endif
 			}
 			else

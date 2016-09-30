@@ -178,10 +178,6 @@ ALL_LDFLAGS += $(ALL_CCFLAGS)
 ALL_LDFLAGS += $(addprefix -Xlinker ,$(LDFLAGS))
 ALL_LDFLAGS += $(addprefix -Xlinker ,$(EXTRA_LDFLAGS))
 
-# Common includes and paths for CUDA
-#INCLUDES  := -I../../common/inc -I/u/weitan/gpfs/software/magma-2.0.0/include  -I/u/weitan/gpfs/software/magma-2.0.0/control -I/u/weitan/gpfs/software/magma-2.0.0/testing
-#LIBRARIES := -L/u/weitan/gpfs/software/magma-2.0.0/lib -L/opt/share/OpenBLAS-0.2.14/lib -L/u/weitan/gpfs/software/magma-2.0.0/testing -L/u/weitan/gpfs/software/magma-2.0.0/testing/lin
-
 ################################################################################
 
 # Gencode arguments
@@ -231,10 +227,6 @@ host_utilities.o:host_utilities.cpp
 	$(NVCC) $(INCLUDES) $(ALL_CCFLAGS) $(GENCODE_FLAGS) -lineinfo -o $@ -c $<
 device_utilities.o:device_utilities.cu
 	$(NVCC) $(INCLUDES) $(ALL_CCFLAGS) $(GENCODE_FLAGS) -lineinfo -o $@ -c $<
-#test_cg.o:test_cg.cpp
-#	$(NVCC) $(INCLUDES) $(ALL_CCFLAGS) $(GENCODE_FLAGS) -lineinfo -o $@ -c $<
-#main: host_utilities.o cg.o test_cg.o
-#	$(NVCC) $(ALL_LDFLAGS) $(GENCODE_FLAGS) -lineinfo -o $@ $+ $(LIBRARIES)
 main: host_utilities.o device_utilities.o cg.o als.o main.o
 	$(NVCC) $(ALL_LDFLAGS) $(GENCODE_FLAGS) -lineinfo -o $@ $+ $(LIBRARIES)
 #netflix

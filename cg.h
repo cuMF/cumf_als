@@ -27,7 +27,7 @@
 int updateXWithCG(const int batchSize, const int batchOffset, float * ythetaT, float * tt, float * XT,
 		cublasHandle_t handle, const int m, const int n, const int f, const int nnz);
 		
-void updateXWithCGHost(float * A, float * x, float * b, const int batchSize, const int f, const float cgIter);
+void updateXWithCGHost(float * A, float * x, float * b, const float * yTy, const int batchSize, const int f, const float cgIter);
 
 void updateXWithCGHost_tt_fp16(float * A, float * x, float * b, const int batchSize, const int f, const float cgIter);
 

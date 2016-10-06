@@ -72,7 +72,7 @@ int main(int argc, char **argv) {
 	unsigned int seed = 0;
 	srand (seed);
 	for (int k = 0; k < n * f; k++)
-		thetaTHost[k] = 0.2*((float) rand() / (float)RAND_MAX);
+		thetaTHost[k] = 0.1*((float) rand() / (float)RAND_MAX);
 	//CG needs to initialize X as well
 	for (int k = 0; k < m * f; k++)
 		XTHost[k] = 0;//0.1*((float) rand() / (float)RAND_MAX);;

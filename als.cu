@@ -217,297 +217,45 @@ __global__ void RMSE(const float * csrVal, const int* cooRowIndex,
 	}
 }
 
-//using fp16 as thetaT's format
-//using fp16 in computate seems causing register pressure since half intrinsics cannot be used.
-//using fp16 in compute also does not converge. not sure if the code is incorrect, or ALS cannot tolerate half-precision
-__global__ void
-__launch_bounds__(64, 6)
-get_hermitian100WithHalf(const int batch_offset, float* tt,
-		const int* csrRowIndex, const int* csrColIndex, const float lambda, const int m, const int F,
-		const half* __restrict__ thetaT_fp16) {
-	extern __shared__ float2 thetaTemp[];
-	int row = blockIdx.x + batch_offset;
-	if (row < m) {
-		//this block needs to handle end - start thetaT columns
-		int start = csrRowIndex[row];
-		int end = csrRowIndex[row + 1];
-		//slide through [start, end] by window size SCAN_BATCH
-		int iterations = (end - start - 1)/SCAN_BATCH + 1;
-		
-		float temp0= 0, temp1= 0, temp2= 0, temp3= 0, temp4= 0, temp5= 0, temp6= 0, temp7= 0, temp8= 0, temp9 = 0;
-		float temp10= 0, temp11= 0, temp12= 0, temp13= 0, temp14= 0, temp15= 0, temp16= 0, temp17= 0, temp18= 0, temp19 = 0;
-		float temp20= 0, temp21= 0, temp22= 0, temp23= 0, temp24= 0, temp25= 0, temp26= 0, temp27= 0, temp28= 0, temp29 = 0;
-		float temp30= 0, temp31= 0, temp32= 0, temp33= 0, temp34= 0, temp35= 0, temp36= 0, temp37= 0, temp38= 0, temp39 = 0;
-		float temp40= 0, temp41= 0, temp42= 0, temp43= 0, temp44= 0, temp45= 0, temp46= 0, temp47= 0, temp48= 0, temp49 = 0;
-		float temp50= 0, temp51= 0, temp52= 0, temp53= 0, temp54= 0, temp55= 0, temp56= 0, temp57= 0, temp58= 0, temp59 = 0;
-		float temp60= 0, temp61= 0, temp62= 0, temp63= 0, temp64= 0, temp65= 0, temp66= 0, temp67= 0, temp68= 0, temp69 = 0;
-		float temp70= 0, temp71= 0, temp72= 0, temp73= 0, temp74= 0, temp75= 0, temp76= 0, temp77= 0, temp78= 0, temp79 = 0;
-		float temp80= 0, temp81= 0, temp82= 0, temp83= 0, temp84= 0, temp85= 0, temp86= 0, temp87= 0, temp88= 0, temp89 = 0;
-		float temp90= 0, temp91= 0, temp92= 0, temp93= 0, temp94= 0, temp95= 0, temp96= 0, temp97= 0, temp98= 0, temp99 = 0;
-	
-		int tile_x = 0;
-		int tile_y = 0;
-
-		int tile = F/10;
-		for ( int i = 0; i < 10; i++){
-			int end = ((20-i)*(i+1))/2;
-			if(threadIdx.x < end){
-				tile_x = i * tile;
-				tile_y = (10 + threadIdx.x - end) * tile;
+__global__ void RMSE_Implicit(const float * csrVal, const int* cooRowIndex,
+		const int* csrColIndex, const float * __restrict__ thetaT, const float * __restrict__ XT, float * error, const int nnz,
+		const int error_size, const int f) {
+	int i = blockDim.x*blockIdx.x + threadIdx.x;
+	if (i < nnz) {
+		int row = cooRowIndex[i];
+		int col = csrColIndex[i];
+		float truth = csrVal[i]>0.0?1.0:0.0;
+		float predicted = 0.0;
+		//if(i%1000000==0) printf("row: %d, col: %d, csrVal[%d]: %f.\n", row, col, i, e);
+		for (int k = 0; k < f; k++) {
+			#ifdef SURPASS_NAN
+			//a and b could be; there are user/item in testing but not training set
+			float a = __ldg(&thetaT[f * col + k]);
+			float b = __ldg(&XT[f * row + k]);
+			if(isnan(a)||isnan(b))
 				break;
-			}
+			else
+				e -= a * b;
+			//if(isnan(a)) printf("row: %d, col: %d\n", row, col);
+			//if(isnan(b)) printf("b[%d]: %f.\n", i, b);
+			#else
+			predicted += __ldg(&thetaT[f * col + k]) * __ldg(&XT[f * row + k]);
+			#endif
 		}
-		//iteration: copy gmem-->smem; aggregate smem-->register
-		for (int iter = 0; iter < iterations; iter ++){
-			//float2 theta;
-			//copy texture --> smem, and sync
-			//two layers: warp divergence unless we split at 32
-			//require: 32 >= SCAN_BATCH
-			if(threadIdx.x < 2*32 ){
-				int index = threadIdx.x - (threadIdx.x/32)*32;	//0 to 31;
-				if(index < SCAN_BATCH){
-					if(iter*SCAN_BATCH + index < end - start){
-						//for (int k = 50*(threadIdx.x/32); k < 50*(threadIdx.x/32) + 50; k += 2){
-						//IMPORTANT: for loop has constant and identical start and end
-						if(threadIdx.x < 32){
-							for (int k = 0; k < 50; k += 2){
-								half2 theta_half2 = __ldg((half2*)&thetaT_fp16[ F * csrColIndex[start + iter*SCAN_BATCH + index] + k]);
-								thetaTemp[index * F/2 + k/2] = __half22float2(theta_half2);
-								//theta.x = __half2float(__ldg(&thetaT_fp16[ F * csrColIndex[start + iter*SCAN_BATCH + index] + k]));
-								//theta.y = __half2float(__ldg(&thetaT_fp16[ F * csrColIndex[start + iter*SCAN_BATCH + index] + k+1]));
-								//thetaTemp[index * F/2 + k/2] = theta;
-							}
-						}
-						else {
-							for (int k = 0; k < 50; k += 2){
-								half2 theta_half2 = __ldg((half2*)&thetaT_fp16[ F * csrColIndex[start + iter*SCAN_BATCH + index] + k + 50]);
-								thetaTemp[index * F/2 + k/2 + 25] = __half22float2(theta_half2);
-								//theta.x = __half2float(__ldg(&thetaT_fp16[ F * csrColIndex[start + iter*SCAN_BATCH + index] + k + 50]));
-								//theta.y = __half2float(__ldg(&thetaT_fp16[ F * csrColIndex[start + iter*SCAN_BATCH + index] + k + 51]));
-								//thetaTemp[index * F/2 + k/2 + 25] = theta;
-							}
-						}
-					}
-					//must be the last iteration; no need to check
-					//not enough theta to copy, set zero
-					else
-						memset(&thetaTemp[index*F/2], 0, F*sizeof(float));
-				}
-			}
-			__syncthreads();
-			//tile: 10*10
-			if(threadIdx.x < 55 ){
-				for(int k = 0; k < SCAN_BATCH; k++){
-					accumulate_in_registers();
-				}
-			}
-		}
-		//end of iteration in copying from smem and aggregating in register
-		__syncthreads();
-
-		if(threadIdx.x < 55 ){
-			//weighted-lambda regularization
-			if(tile_x == tile_y){
-				float temp = (end - start) * lambda;
-				temp0 += temp;
-				temp11 += temp;
-				temp22 += temp;
-				temp33 += temp;
-				temp44 += temp;
-				temp55 += temp;
-				temp66 += temp;
-				temp77 += temp;
-				temp88 += temp;
-				temp99 += temp;
-			}
-			//copy output to gmem
-			int index = blockIdx.x*F*F;
-			fill_lower_half_from_registers();
-			//symmetric
-			if(tile_x!=tile_y){
-				fill_upper_half_from_registers();
-			}
-		}
+		predicted = fmaxf(fminf(predicted, 1.0), 0.0); 
+		atomicAdd(&error[i%error_size], (truth-predicted)*(truth-predicted));
+		//if(i%1000000==0) printf("error[%d]: %f.\n", i, e);
 	}
 }
 
-__global__ void
-__launch_bounds__(64, 6)
-get_hermitian100_tt_fp16(const int batch_offset, half2* tt,
-		const int* csrRowIndex, const int* csrColIndex, const float lambda, const int m, const int F,
-		const float* __restrict__ thetaT) {
-	extern __shared__ float2 thetaTemp[];
-	int row = blockIdx.x + batch_offset;
-	if (row < m) {
-		//this block needs to handle end - start thetaT columns
-		int start = csrRowIndex[row];
-		int end = csrRowIndex[row + 1];
-		//slide through [start, end] by window size SCAN_BATCH
-		int iterations = (end - start - 1)/SCAN_BATCH + 1;
-		float temp0= 0, temp1= 0, temp2= 0, temp3= 0, temp4= 0, temp5= 0, temp6= 0, temp7= 0, temp8= 0, temp9 = 0;
-		float temp10= 0, temp11= 0, temp12= 0, temp13= 0, temp14= 0, temp15= 0, temp16= 0, temp17= 0, temp18= 0, temp19 = 0;
-		float temp20= 0, temp21= 0, temp22= 0, temp23= 0, temp24= 0, temp25= 0, temp26= 0, temp27= 0, temp28= 0, temp29 = 0;
-		float temp30= 0, temp31= 0, temp32= 0, temp33= 0, temp34= 0, temp35= 0, temp36= 0, temp37= 0, temp38= 0, temp39 = 0;
-		float temp40= 0, temp41= 0, temp42= 0, temp43= 0, temp44= 0, temp45= 0, temp46= 0, temp47= 0, temp48= 0, temp49 = 0;
-		float temp50= 0, temp51= 0, temp52= 0, temp53= 0, temp54= 0, temp55= 0, temp56= 0, temp57= 0, temp58= 0, temp59 = 0;
-		float temp60= 0, temp61= 0, temp62= 0, temp63= 0, temp64= 0, temp65= 0, temp66= 0, temp67= 0, temp68= 0, temp69 = 0;
-		float temp70= 0, temp71= 0, temp72= 0, temp73= 0, temp74= 0, temp75= 0, temp76= 0, temp77= 0, temp78= 0, temp79 = 0;
-		float temp80= 0, temp81= 0, temp82= 0, temp83= 0, temp84= 0, temp85= 0, temp86= 0, temp87= 0, temp88= 0, temp89 = 0;
-		float temp90= 0, temp91= 0, temp92= 0, temp93= 0, temp94= 0, temp95= 0, temp96= 0, temp97= 0, temp98= 0, temp99 = 0;
-
-		int tile_x = 0;
-		int tile_y = 0;
-
-		int tile = F/10;
-		for ( int i = 0; i < 10; i++){
-			int end = ((20-i)*(i+1))/2;
-			if(threadIdx.x < end){
-				tile_x = i * tile;
-				tile_y = (10 + threadIdx.x - end) * tile;
-				break;
-			}
-		}
-		//iteration: copy gmem-->smem; aggregate smem-->register
-		for (int iter = 0; iter < iterations; iter ++){
-			float2 theta;
-			//copy texture --> smem, and sync
-/*
-			if(threadIdx.x < SCAN_BATCH){
-				if(iter*SCAN_BATCH + threadIdx.x < end - start){
-					for (int k = 0; k < F; k += 2){
-						theta.x = tex1Dfetch(thetaTTexRef, F * csrColIndex[start + iter*SCAN_BATCH + threadIdx.x] + k);
-						theta.y = tex1Dfetch(thetaTTexRef, F * csrColIndex[start + iter*SCAN_BATCH + threadIdx.x] + k+1);
-						thetaTemp[threadIdx.x * F/2 + k/2] = theta;
-					}
-				}
-				//must be the last iteration; no need to check
-				//not enough theta to copy, set zero
-				else
-					memset(&thetaTemp[threadIdx.x*F/2], 0, F*sizeof(float));
-			}
-*/
-
-			//two layers: warp divergence unless we split at 32
-			//require 32 >= SCAN_BATCH
-			if(threadIdx.x < 2*32 ){
-				//int index = threadIdx.x;
-				int index = threadIdx.x - (threadIdx.x/32)*32;	//0 to 31;
-				if(index < SCAN_BATCH){
-					if(iter*SCAN_BATCH + index < end - start){
-						//for (int k = 50*(threadIdx.x/32); k < 50*(threadIdx.x/32) + 50; k += 2){
-						//IMPORTANT: for loop has constant and identical start and end
-						if(threadIdx.x < 32){
-							for (int k = 0; k < 50; k += 2){
-								theta.x = __ldg(&thetaT[ F * csrColIndex[start + iter*SCAN_BATCH + index] + k]);
-								theta.y = __ldg(&thetaT[ F * csrColIndex[start + iter*SCAN_BATCH + index] + k+1]);
-								thetaTemp[index * F/2 + k/2] = theta;
-							}
-						}
-						else {
-							for (int k = 0; k < 50; k += 2){
-								theta.x = __ldg(&thetaT[ F * csrColIndex[start + iter*SCAN_BATCH + index] + k + 50]);
-								theta.y = __ldg(&thetaT[ F * csrColIndex[start + iter*SCAN_BATCH + index] + k + 51]);
-								thetaTemp[index * F/2 + k/2 + 25] = theta;
-							}
-						}
-					}
-					//must be the last iteration; no need to check
-					//not enough theta to copy, set zero
-					else
-						memset(&thetaTemp[index*F/2], 0, F*sizeof(float));
-				}
-			}
-
-
-/*			//issue: not coalesced access to csrColIndex
-			if(threadIdx.x < F && threadIdx.x%2 == 0){
-				for(int k = 0; k< SCAN_BATCH; k++){
-					if(iter*SCAN_BATCH + k < end - start){
-						theta.x = tex1Dfetch(thetaTTexRef, F * csrColIndex[start + iter*SCAN_BATCH + k] + threadIdx.x);
-						theta.y = tex1Dfetch(thetaTTexRef, F * csrColIndex[start + iter*SCAN_BATCH + k] + threadIdx.x +1);
-						thetaTemp[k * F/2 + threadIdx.x/2] = theta;
-					}
-					//must be the last iteration; no need to check
-					//not enough theta to copy, set zero
-					else
-						memset(&thetaTemp[k*F/2 + threadIdx.x/2], 0, 2*sizeof(float));
-				}
-			}
-*/
-/*
-			int layers = blockDim.x/SCAN_BATCH;	//100/30 = 3
-			//int height = blockDim.x/layers; //30
-			int y = threadIdx.x/SCAN_BATCH;//0,1,2,3; y==3 is not viable
-			//min(y, (layers-1)) * height
-			int y_start = y * 30;//0-29:0;30-59:30;60-89:60
-			int y_end = y_start + 30;	//0-29:30;30-59:60;60-89:90
-			if(y >= layers - 1) y_end = F;	//60-89:100
-			if(threadIdx.x - y_start < SCAN_BATCH){
-				if(iter*SCAN_BATCH + (threadIdx.x - y_start) < end - start){
-					for (int k = y_start; k < y_end; k += 2){
-						theta.x =
-								tex1Dfetch(thetaTTexRef, F * csrColIndex[start + iter*SCAN_BATCH + (threadIdx.x - y_start)] + k);
-						theta.y =
-								tex1Dfetch(thetaTTexRef, F * csrColIndex[start + iter*SCAN_BATCH + (threadIdx.x - y_start)] + k+1);
-						thetaTemp[(threadIdx.x - y_start)* F/2 + k/2] = theta;
-					}
-				}
-				//must be the last iteration; no need to check
-				//not enough theta to copy, set zero
-				else
-					memset(&thetaTemp[(threadIdx.x - y_start)*F/2 + y_start/2], 0, (y_end - y_start)*sizeof(float));
-			}
-
-*/
-			__syncthreads();
-
-			//tile: 10*10
-			if(threadIdx.x < 55 ){
-				for(int k = 0; k < SCAN_BATCH; k++){
-					accumulate_in_registers();
-				}
-			}
-		}
-		//end of iteration in copying from smem and aggregating in register
-		__syncthreads();
-		#ifdef DEBUG
-		//if(threadIdx.x==0)
-		//	printf("***temp 0~9: %f %f %f %f %f %f %f %f %f %f\n", temp0, temp1, temp2, temp3, temp4, temp5, temp6, temp7, temp8, temp9);
-		#endif
-		if(threadIdx.x < 55 ){
-			//weighted-lambda regularization
-			if(tile_x == tile_y){
-				float temp = (end - start) * lambda;
-				temp0 += temp;
-				temp11 += temp;
-				temp22 += temp;
-				temp33 += temp;
-				temp44 += temp;
-				temp55 += temp;
-				temp66 += temp;
-				temp77 += temp;
-				temp88 += temp;
-				temp99 += temp;
-			}
-			//copy output to gmem
-			int index = blockIdx.x*F*F/2;
-			//fill_lower_half_from_registers();
-			fill_lower_half_from_registers_fp16();
-			//symmetric
-			if(tile_x!=tile_y){
-				//fill_upper_half_from_registers();
-				fill_upper_half_from_registers_fp16();
-			}
-		}
-	}
-}
 
 __global__ void
 __launch_bounds__(64)
 get_hermitian100(const int batch_offset, float2* tt,
-		const int* csrRowIndex, const int* csrColIndex, const float lambda, const int m, const int F,
+		const int* csrRowIndex, const int* csrColIndex, const float* csrConfidence, const float lambda, const int m, const int F,
 		const float2* __restrict__ thetaT) {
 	extern __shared__ float2 thetaTemp[];
+	float* confSmem = (float*)&thetaTemp[F*SCAN_BATCH/2];
 	int row = blockIdx.x + batch_offset;
 	if (row < m) {
 		//this block needs to handle end - start thetaT columns
@@ -554,6 +302,7 @@ get_hermitian100(const int batch_offset, float2* tt,
 				int anchor = start + iter*SCAN_BATCH + threadIdx.x/2;
 				if(anchor < end){
 					int col = csrColIndex[anchor];
+					confSmem[threadIdx.x/2] = csrConfidence[anchor];
 					//IMPORTANT: for loop has constant and identical start and end
 					for (int k = 0; k < 50; k += 2)
 						thetaTemp[threadIdx.x*F/4 + k/2] =__ldg(&thetaT[ F/2 * col + threadIdx.x%2*F/4 + k/2]);
@@ -603,7 +352,7 @@ get_hermitian100(const int batch_offset, float2* tt,
 		if(threadIdx.x < 55 ){
 			//weighted-lambda regularization
 			if(tile_x == tile_y){
-				float temp = (end - start) * lambda;
+				float temp = lambda;
 				temp0 += temp;
 				temp11 += temp;
 				temp22 += temp;
@@ -628,96 +377,14 @@ get_hermitian100(const int batch_offset, float2* tt,
 	}
 }
 
-/*a generic kernel to get the hermitian matrices
- * as the left-hand side of the equations, to update X in ALS
- *examplary F = 100, T = 10
- */
-__global__ void
-get_hermitianT10(const int batch_offset, float* tt,
-		const int* csrRowIndex, const int* csrColIndex, const float lambda, const int m, const int F,
-		const float* __restrict__ thetaT) {
-	extern __shared__ float2 thetaTemp [];
-	int row = blockIdx.x + batch_offset;
-	if (row < m) {
-		//this block needs to handle end - start thetaT columns
-		int start = csrRowIndex[row];
-		int end = csrRowIndex[row + 1];
-		//slide through [start, end] by window size SCAN_BATCH
-		int iterations = (end - start - 1)/SCAN_BATCH + 1;
-		float temp0= 0, temp1= 0, temp2= 0, temp3= 0, temp4= 0, temp5= 0, temp6= 0, temp7= 0, temp8= 0, temp9 = 0;
-		float temp10= 0, temp11= 0, temp12= 0, temp13= 0, temp14= 0, temp15= 0, temp16= 0, temp17= 0, temp18= 0, temp19 = 0;
-		float temp20= 0, temp21= 0, temp22= 0, temp23= 0, temp24= 0, temp25= 0, temp26= 0, temp27= 0, temp28= 0, temp29 = 0;
-		float temp30= 0, temp31= 0, temp32= 0, temp33= 0, temp34= 0, temp35= 0, temp36= 0, temp37= 0, temp38= 0, temp39 = 0;
-		float temp40= 0, temp41= 0, temp42= 0, temp43= 0, temp44= 0, temp45= 0, temp46= 0, temp47= 0, temp48= 0, temp49 = 0;
-		float temp50= 0, temp51= 0, temp52= 0, temp53= 0, temp54= 0, temp55= 0, temp56= 0, temp57= 0, temp58= 0, temp59 = 0;
-		float temp60= 0, temp61= 0, temp62= 0, temp63= 0, temp64= 0, temp65= 0, temp66= 0, temp67= 0, temp68= 0, temp69 = 0;
-		float temp70= 0, temp71= 0, temp72= 0, temp73= 0, temp74= 0, temp75= 0, temp76= 0, temp77= 0, temp78= 0, temp79 = 0;
-		float temp80= 0, temp81= 0, temp82= 0, temp83= 0, temp84= 0, temp85= 0, temp86= 0, temp87= 0, temp88= 0, temp89 = 0;
-		float temp90= 0, temp91= 0, temp92= 0, temp93= 0, temp94= 0, temp95= 0, temp96= 0, temp97= 0, temp98= 0, temp99 = 0;
-
-		int N = F/T10; // N = 100/10=10; for F = 100 and T = 10
-		int effective_block_size = N*(N+1)/2;
-		//get the x and y coordinate
-		int tile_x = 0;
-		int tile_y = 0;
-		for ( int i = 0; i < N; i++ ) {
-			int end = ((2*N-i)*(i+1))/2;
-			if(threadIdx.x < end){
-				tile_x = i * T10;
-				tile_y = (N + threadIdx.x - end) * T10;
-				break;
-			}
-		}
-		int index = blockIdx.x*F*F;
-		//iteration: copy gmem-->smem; aggregate smem-->register
-		for (int iter = 0; iter < iterations; iter ++){
-			//phase 1 in iteration: gmem --> smem
-			
-			//REQ: blockDim.x >= F/2
-			if(threadIdx.x < F/2){
-				for(int k = 0; k< SCAN_BATCH; k++){
-					if(iter*SCAN_BATCH + k < end - start){
-						float2 theta;
-						theta.x = __ldg(&thetaT[F * csrColIndex[start + iter*SCAN_BATCH + k] + 2*threadIdx.x]);
-						theta.y = __ldg(&thetaT[F * csrColIndex[start + iter*SCAN_BATCH + k] + 2*threadIdx.x+1]);
-						thetaTemp[k * F/2 + threadIdx.x] = theta;
-						//this simpler statement is slower.
-						//thetaTemp[k * F/2 + threadIdx.x] = __ldg((float2*)&thetaT[F * csrColIndex[start + iter*SCAN_BATCH + k] + 2*threadIdx.x]);
-					}
-					//not enough theta to copy, set zero
-					else
-						memset(&thetaTemp[k*F/2 + threadIdx.x], 0, 2*sizeof(float));
-				}
-			}			
-			__syncthreads();
-			
-			//phase 2 in iteration: smem --> register
-			if(threadIdx.x < effective_block_size){//this redundant "if" seems improving kernel performance
-				for(int k = 0; k < SCAN_BATCH; k++){
-					accumulate_in_registers();
-				}
-			}
-		}
-		//end of iteration in copying from smem and aggregating in register
-		__syncthreads();
-
-		//phase 3, after iteration: register --> gmem
-		if(threadIdx.x < effective_block_size){
-			fill_lower_half_from_registers();
-
-			//symmetric
-			if(tile_x != tile_y){
-				fill_upper_half_from_registers();
-			}
-			//regularization
-			if(tile_x == tile_y){
-				for(int k = 0; k < T10; k++)
-					tt[index + (tile_x+k)*(1+F)] += (end - start) * lambda;
-			}
-		}
-	}
+/* in paper
+confidence[i] = 1 + alpha*ratings[i]
+*/
+__global__ void ratingsToConfidence(const float * ratings, float* confidence, const int size, const float alpha) {
+	int i = blockDim.x*blockIdx.x + threadIdx.x;
+	if (i < size)
+		confidence[i] =  1 + alpha*ratings[i];
 }
-
 
 float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const float* csrValHostPtr,
 		const int* cscRowIndexHostPtr, const int* cscColIndexHostPtr, const float* cscValHostPtr,
@@ -739,7 +406,7 @@ float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const 
 	int * cscRowIndex = 0;
 	int * cscColIndex = 0;
 	//coo to calculate RMSE
-	int * cooRowIndex =0;
+	int * cooRowIndex = 0;
 	float * cooVal_test;
 	int * cooRowIndex_test;
 	int * cooColIndex_test;
@@ -782,6 +449,11 @@ float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const 
 	double t0 = 0;
 	double t1 = 0;
 	#endif
+	//implicit
+	float* csrConfidence = 0;
+	float* cscConfidence = 0;
+	float* thetaTtheta = 0;
+	float* xTx = 0;
 
 	printf("*******start iterations...\n");
 	for(int iter = 0; iter < ITERS ; iter ++){
@@ -797,6 +469,17 @@ float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const 
 		cudacall(cudaMemcpy(csrRowIndex, csrRowIndexHostPtr,(size_t ) ((m + 1) * sizeof(csrRowIndex[0])), cudaMemcpyHostToDevice));
 		cudacall(cudaMemcpy(csrColIndex, csrColIndexHostPtr,(size_t ) (nnz * sizeof(csrColIndex[0])), cudaMemcpyHostToDevice));
 		cudacall(cudaMemcpy(csrVal, csrValHostPtr,(size_t ) (nnz * sizeof(csrVal[0])),cudaMemcpyHostToDevice));
+		const float alpha = 1.0f;
+		const float beta = 0.0f;
+		
+		cudacall(cudaMalloc((void** ) &csrConfidence, nnz * sizeof(csrConfidence[0])));
+		cudacall(cudaMalloc((void** ) &thetaTtheta, f*f * sizeof(thetaTtheta[0])));
+		cublascall(cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_T, f, f, n, &alpha,
+		(const float * ) thetaT, f, (const float * )thetaT, f, &beta, thetaTtheta, f));
+
+		ratingsToConfidence<<<(nnz-1)/1024 + 1, 1024>>>(csrVal, csrConfidence, nnz, 40);
+		cudaDeviceSynchronize();
+		cudaCheckError();
 		#ifdef DEBUG
 		printf("\tgenerate: Y*theta using cusparse.\n");
 		#endif
@@ -805,10 +488,9 @@ float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const 
 		cudacall(cudaMalloc((void** ) &ytheta, f * m * sizeof(ytheta[0])));
 		cudacall(cudaMalloc((void** ) &ythetaT, f * m * sizeof(ythetaT[0])));
 
-		const float alpha = 1.0f;
-		const float beta = 0.0f;
+		
 		cusparsecall (cusparseScsrmm2(cushandle, CUSPARSE_OPERATION_NON_TRANSPOSE,
-				CUSPARSE_OPERATION_TRANSPOSE, m, f, n, nnz, &alpha, descr, csrVal,
+				CUSPARSE_OPERATION_TRANSPOSE, m, f, n, nnz, &alpha, descr, csrConfidence,
 				csrRowIndex, csrColIndex, thetaT, f, &beta, ytheta, m) );
 		//cudaDeviceSynchronize();
 		//printf("*******transpose ytheta use cublas.\n");
@@ -822,7 +504,9 @@ float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const 
 		#ifdef DEBUG
 		printf("\tgenerate: Y*theta run %f seconds.\n", seconds() - t1);
 		#endif
+		
 
+		
 		int block_dim = f/T10*(f/T10+1)/2;
 		if (block_dim < f/2) block_dim = f/2;
 		for(int batch_id = 0; batch_id< X_BATCH; batch_id ++){
@@ -861,8 +545,8 @@ float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const 
 					saveDeviceFloatArrayToFile(std::string("./log/cg-xx16-tt16.") + std::to_string(iter),  f * f * batch_size/2, tt);
 					#endif					
 				#else
-				get_hermitian100<<<batch_size, 64, SCAN_BATCH * f/2*sizeof(float2)>>>
-					(batch_offset, (float2*)tt, csrRowIndex, csrColIndex, lambda, m, f, (float2*)thetaT);
+				get_hermitian100<<<batch_size, 64, SCAN_BATCH * (f+1)/2*sizeof(float2)>>>
+					(batch_offset, (float2*)tt, csrRowIndex, csrColIndex, csrConfidence, lambda, m, f, (float2*)thetaT);
 					#ifdef CUMF_SAVE_MODEL
 					saveDeviceFloatArrayToFile(std::string("./log/0904/tt32.") + std::to_string(iter),  f * f * batch_size, tt);
 					#endif
@@ -872,9 +556,9 @@ float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const 
 				//	(batch_offset, csrRowIndex, csrColIndex, lambda, m, f, thetaT, XT, ythetaT, 6);
 				#endif
 			}
-			else
-				get_hermitianT10<<<batch_size, block_dim, SCAN_BATCH * f/2*sizeof(float2)>>>
-					(batch_offset, tt, csrRowIndex, csrColIndex, lambda, m, f, thetaT);
+			//else
+				//get_hermitianT10<<<batch_size, block_dim, SCAN_BATCH * f/2*sizeof(float2)>>>
+				//	(batch_offset, tt, csrRowIndex, csrColIndex, lambda, m, f, thetaT);
 			cudaDeviceSynchronize();
 			cudaCheckError();
 			#ifdef DEBUG
@@ -888,7 +572,7 @@ float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const 
 				updateXWithCGHost_tt_fp16(tt, &XT[batch_offset*f], &ythetaT[batch_offset*f], batch_size, f, CG_ITER);
 				#else
 				printf("\tCG solver with fp32.\n");
-				updateXWithCGHost(tt, &XT[batch_offset*f], &ythetaT[batch_offset*f], batch_size, f, CG_ITER);
+				updateXWithCGHost(tt, &XT[batch_offset*f], &ythetaT[batch_offset*f], thetaTtheta, batch_size, f, CG_ITER);
 				#endif
 			#else//use LU solver instead
 			//host pointers for cublas batch operations
@@ -912,6 +596,10 @@ float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const 
 		cudacall(cudaFree(csrRowIndex));
 		cudacall(cudaFree(csrColIndex));
 		cudacall(cudaFree(ythetaT));
+		
+		cudacall(cudaFree(csrConfidence));
+		cudacall(cudaFree(thetaTtheta));
+
 
 ///*
 		#ifdef DEBUG
@@ -920,19 +608,31 @@ float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const 
 		printf("---------------------------------- ALS iteration %d, update theta ----------------------------------\n", iter);
 		printf("\tgenerate: Y'*X using cusparse.\n");
 		#endif
+		cudacall(cudaMalloc((void** ) &cscConfidence, nnz * sizeof(cscConfidence[0])));
+		cudacall(cudaMalloc((void** ) &xTx, f*f * sizeof(xTx[0])));
+		cublascall(cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_T, f, f, m, &alpha,
+		(const float * ) XT, f, (const float * )XT, f, &beta, xTx, f));
+		cudaDeviceSynchronize();
+		cudaCheckError();
+		ratingsToConfidence<<<(nnz-1)/1024 + 1, 1024>>>(cscVal, cscConfidence, nnz, 40);
+		cudaDeviceSynchronize();
+		cudaCheckError();
+
 		float * yTX = 0;
 		float * yTXT = 0;
 		cudacall(cudaMalloc((void** ) &yTXT, f * n * sizeof(yTXT[0])));
 		cudacall(cudaMalloc((void** ) &yTX, n * f * sizeof(yTX[0])));
 		cusparsecall( cusparseScsrmm2(cushandle, CUSPARSE_OPERATION_NON_TRANSPOSE,
-				CUSPARSE_OPERATION_TRANSPOSE, n, f, m, nnz, &alpha, descr, cscVal,
+				CUSPARSE_OPERATION_TRANSPOSE, n, f, m, nnz, &alpha, descr, cscConfidence,
 				cscColIndex, cscRowIndex, XT, f, &beta, yTX, n) );
-		//cudaDeviceSynchronize();
+		cudaDeviceSynchronize();
+		cudaCheckError();
 		//printf("*******transpose yTX \n");
 		//yTX: n*f; need yTXT = (yTX).T = f*n
 		cublascall(cublasSgeam(handle, CUBLAS_OP_T, CUBLAS_OP_N, f, n, &alpha,
 				(const float * ) yTX, n, &beta, yTXT, f, yTXT, f));
 		cudaDeviceSynchronize();
+		cudaCheckError();
 		cudacall(cudaFree(yTX));
 		#ifdef DEBUG
 		printf("\tgenerate: Y'*X run %f seconds.\n", seconds() - t1);
@@ -975,13 +675,13 @@ float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const 
 				get_hermitian100_tt_fp16<<<batch_size, 64, SCAN_BATCH * f/2*sizeof(float2)>>>
 					(batch_offset, (half2*) xx, cscColIndex, cscRowIndex, lambda, n, f, XT);
 				#else
-				get_hermitian100<<<batch_size, 64, SCAN_BATCH * f/2*sizeof(float2)>>>
-					(batch_offset, (float2*)xx, cscColIndex, cscRowIndex, lambda, n, f, (float2*)XT);
+				get_hermitian100<<<batch_size, 64, SCAN_BATCH * (f+1)/2*sizeof(float2)>>>
+					(batch_offset, (float2*)xx, cscColIndex, cscRowIndex, cscConfidence, lambda, n, f, (float2*)XT);
 				#endif
 			}
-			else
-				get_hermitianT10<<<batch_size, block_dim, SCAN_BATCH*f*sizeof(float)>>>
-					(batch_offset, xx, cscColIndex, cscRowIndex, lambda, n, f, XT);
+			//else
+			//	get_hermitianT10<<<batch_size, block_dim, SCAN_BATCH*f*sizeof(float)>>>
+			//		(batch_offset, xx, cscColIndex, cscRowIndex, lambda, n, f, XT);
 			cudaDeviceSynchronize();
 			cudaCheckError();
 			#ifdef DEBUG
@@ -998,7 +698,7 @@ float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const 
 				updateXWithCGHost_tt_fp16(xx, &thetaT[batch_offset*f], &yTXT[batch_offset*f], batch_size, f, CG_ITER);
 				#else
 				printf("\tCG solver with fp32.\n");
-				updateXWithCGHost(xx, &thetaT[batch_offset*f], &yTXT[batch_offset*f], batch_size, f, CG_ITER);
+				updateXWithCGHost(xx, &thetaT[batch_offset*f], &yTXT[batch_offset*f], xTx, batch_size, f, CG_ITER);
 				#endif
 			#else
 			float ** devPtrXXHost = 0;
@@ -1019,6 +719,9 @@ float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const 
 			cudacall(cudaFree(xx));
 		}
 		cudacall(cudaFree(yTXT));
+		cudacall(cudaFree(cscConfidence));
+		cudacall(cudaFree(xTx));
+
 		#ifdef DEBUG
 		printf("update theta run %f seconds, gridSize: %d, blockSize %d.\n",
 				seconds() - t0, n, f);
@@ -1036,7 +739,7 @@ float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const 
 		cudacall(cudaMemcpy(csrColIndex, csrColIndexHostPtr,(size_t ) (nnz * sizeof(csrColIndex[0])), cudaMemcpyHostToDevice));
 		cudacall(cudaMemcpy(csrVal, csrValHostPtr,(size_t ) (nnz * sizeof(csrVal[0])),cudaMemcpyHostToDevice));
 
-		RMSE<<<(nnz-1)/256 + 1, 256>>>
+		RMSE_Implicit<<<(nnz-1)/256 + 1, 256>>>
 				(csrVal, cooRowIndex, csrColIndex, thetaT, XT, errors_train, nnz, error_size, f);
 		cudaDeviceSynchronize();
 		cudaCheckError();
@@ -1063,7 +766,7 @@ float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const 
 		cudacall(cudaMemcpy(cooColIndex_test, cooColIndexTestHostPtr,(size_t ) (nnz_test * sizeof(cooColIndex_test[0])), cudaMemcpyHostToDevice));
 		cudacall(cudaMemcpy(cooVal_test, cooValHostTestPtr,(size_t ) (nnz_test * sizeof(cooVal_test[0])),cudaMemcpyHostToDevice));
 
-		RMSE<<<(nnz_test-1)/256, 256>>>(cooVal_test, cooRowIndex_test, cooColIndex_test, thetaT, XT,
+		RMSE_Implicit<<<(nnz_test-1)/256, 256>>>(cooVal_test, cooRowIndex_test, cooColIndex_test, thetaT, XT,
 				errors_test, nnz_test, error_size, f);
 		cudaDeviceSynchronize();
 		cudaCheckError();

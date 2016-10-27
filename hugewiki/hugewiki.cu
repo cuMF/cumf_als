@@ -43,7 +43,7 @@
 
 //debug option to save model
 //#define CUMF_SAVE_MODEL
-#define CUMF_TT_FP16
+//#define CUMF_TT_FP16
 
 
 using namespace std;

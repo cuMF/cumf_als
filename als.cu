@@ -27,8 +27,8 @@
 //#define SURPASS_NAN
 #define USE_CG
 //if cojugate gradient solver generates results in FP16 
-//#define CUMF_TT_FP16
-//#define CUMF_XX_FP16
+#define CUMF_TT_FP16
+#define CUMF_XX_FP16
 #define CG_ITER 6
 //#define CUMF_SAVE_MODEL
 #include "als.h"
@@ -41,7 +41,7 @@
 #ifdef CUMF_USE_HALF
 #define SCAN_BATCH 24
 #else
-#define SCAN_BATCH 28
+#define SCAN_BATCH 24
 #endif
 #include <iostream>
 using namespace std;
@@ -216,6 +216,130 @@ __global__ void RMSE(const float * csrVal, const int* cooRowIndex,
 		//if(i%1000000==0) printf("error[%d]: %f.\n", i, e);
 	}
 }
+
+
+__global__ void
+__launch_bounds__(64, 6)
+get_hermitian100_tt_fp16_pascal(const int batch_offset, half2* tt,
+		const int* csrRowIndex, const int* csrColIndex, const float lambda, const int m, const int F,
+		const float* __restrict__ thetaT) {
+	extern __shared__ float2 thetaTemp[];
+	int row = blockIdx.x + batch_offset;
+	if (row < m) {
+		//this block needs to handle end - start thetaT columns
+		int start = csrRowIndex[row];
+		int end = csrRowIndex[row + 1];
+		//slide through [start, end] by window size SCAN_BATCH
+		int iterations = (end - start - 1)/SCAN_BATCH + 1;
+
+
+		half temp0 = __float2half(0); half temp1 = temp0; half temp2 = temp0; half temp3 = temp0; half temp4 = temp0; 
+		half temp5 = temp0; half temp6 = temp0; half temp7 = temp0; half temp8 = temp0; half temp9 = temp0; 
+		half temp10 = temp0; half temp11 = temp0; half temp12 = temp0; half temp13 = temp0; half temp14 = temp0; 
+		half temp15 = temp0; half temp16 = temp0; half temp17 = temp0; half temp18 = temp0; half temp19 = temp0; 
+		half temp20 = temp0; half temp21 = temp0; half temp22 = temp0; half temp23 = temp0; half temp24 = temp0; 
+		half temp25 = temp0; half temp26 = temp0; half temp27 = temp0; half temp28 = temp0; half temp29 = temp0; 
+		half temp30 = temp0; half temp31 = temp0; half temp32 = temp0; half temp33 = temp0; half temp34 = temp0; 
+		half temp35 = temp0; half temp36 = temp0; half temp37 = temp0; half temp38 = temp0; half temp39 = temp0; 
+		half temp40 = temp0; half temp41 = temp0; half temp42 = temp0; half temp43 = temp0; half temp44 = temp0; 
+		half temp45 = temp0; half temp46 = temp0; half temp47 = temp0; half temp48 = temp0; half temp49 = temp0; 
+		half temp50 = temp0; half temp51 = temp0; half temp52 = temp0; half temp53 = temp0; half temp54 = temp0; 
+		half temp55 = temp0; half temp56 = temp0; half temp57 = temp0; half temp58 = temp0; half temp59 = temp0; 
+		half temp60 = temp0; half temp61 = temp0; half temp62 = temp0; half temp63 = temp0; half temp64 = temp0; 
+		half temp65 = temp0; half temp66 = temp0; half temp67 = temp0; half temp68 = temp0; half temp69 = temp0; 
+		half temp70 = temp0; half temp71 = temp0; half temp72 = temp0; half temp73 = temp0; half temp74 = temp0; 
+		half temp75 = temp0; half temp76 = temp0; half temp77 = temp0; half temp78 = temp0; half temp79 = temp0; 
+		half temp80 = temp0; half temp81 = temp0; half temp82 = temp0; half temp83 = temp0; half temp84 = temp0; 
+		half temp85 = temp0; half temp86 = temp0; half temp87 = temp0; half temp88 = temp0; half temp89 = temp0; 
+		half temp90 = temp0; half temp91 = temp0; half temp92 = temp0; half temp93 = temp0; half temp94 = temp0; 
+		half temp95 = temp0; half temp96 = temp0; half temp97 = temp0; half temp98 = temp0; half temp99 = temp0; 
+
+
+		int tile_x = 0;
+		int tile_y = 0;
+
+		int tile = F/10;
+		for ( int i = 0; i < 10; i++){
+			int end = ((20-i)*(i+1))/2;
+			if(threadIdx.x < end){
+				tile_x = i * tile;
+				tile_y = (10 + threadIdx.x - end) * tile;
+				break;
+			}
+		}
+		//iteration: copy gmem-->smem; aggregate smem-->register
+		for (int iter = 0; iter < iterations; iter ++){
+			float2 theta;
+			//copy texture --> smem, and sync
+			//two layers: warp divergence unless we split at 32
+			//require 32 >= SCAN_BATCH
+			if(threadIdx.x < 2*32 ){
+				//int index = threadIdx.x;
+				int index = threadIdx.x - (threadIdx.x/32)*32;	//0 to 31;
+				if(index < SCAN_BATCH){
+					if(iter*SCAN_BATCH + index < end - start){
+						//for (int k = 50*(threadIdx.x/32); k < 50*(threadIdx.x/32) + 50; k += 2){
+						//IMPORTANT: for loop has constant and identical start and end
+						if(threadIdx.x < 32){
+							for (int k = 0; k < 50; k += 2){
+								theta.x = __ldg(&thetaT[ F * csrColIndex[start + iter*SCAN_BATCH + index] + k]);
+								theta.y = __ldg(&thetaT[ F * csrColIndex[start + iter*SCAN_BATCH + index] + k+1]);
+								thetaTemp[index * F/2 + k/2] = theta;
+							}
+						}
+						else {
+							for (int k = 0; k < 50; k += 2){
+								theta.x = __ldg(&thetaT[ F * csrColIndex[start + iter*SCAN_BATCH + index] + k + 50]);
+								theta.y = __ldg(&thetaT[ F * csrColIndex[start + iter*SCAN_BATCH + index] + k + 51]);
+								thetaTemp[index * F/2 + k/2 + 25] = theta;
+							}
+						}
+					}
+					//must be the last iteration; no need to check
+					//not enough theta to copy, set zero
+					else
+						memset(&thetaTemp[index*F/2], 0, F*sizeof(float));
+				}
+			}
+			__syncthreads();
+
+			//tile: 10*10
+			if(threadIdx.x < 55 ){
+				for(int k = 0; k < SCAN_BATCH; k++){
+					accumulate_in_fp16registers();
+				}
+			}
+		}
+		//end of iteration in copying from smem and aggregating in register
+		__syncthreads();
+		if(threadIdx.x < 55 ){
+			//weighted-lambda regularization
+			if(tile_x == tile_y){
+				half temp = __float2half ((end - start) * lambda);
+				temp0 = __hadd(temp0, temp);
+				temp11 = __hadd(temp11,temp);
+				temp22 = __hadd(temp22,temp);
+				temp33 = __hadd(temp33,temp);
+				temp44 = __hadd(temp44,temp);
+				temp55 = __hadd(temp55,temp);
+				temp66 = __hadd(temp66,temp);
+				temp77 = __hadd(temp77,temp);
+				temp88 = __hadd(temp88,temp);
+				temp99 = __hadd(temp99,temp);
+			}
+			//copy output to gmem
+			int index = blockIdx.x*F*F/2;
+			//fill_lower_half_from_registers();
+			fill_lower_half_from_fp16registers();
+			//symmetric
+			if(tile_x!=tile_y){
+				//fill_upper_half_from_registers();
+				fill_upper_half_from_fp16registers();
+			}
+		}
+	}
+}
+
 
 //using fp16 as thetaT's format
 //using fp16 in computate seems causing register pressure since half intrinsics cannot be used.
@@ -507,7 +631,7 @@ __launch_bounds__(64)
 get_hermitian100(const int batch_offset, float2* tt,
 		const int* csrRowIndex, const int* csrColIndex, const float lambda, const int m, const int F,
 		const float2* __restrict__ thetaT) {
-	extern __shared__ float2 thetaTemp[];
+	__shared__ float2 thetaTemp[50*SCAN_BATCH];
 	int row = blockIdx.x + batch_offset;
 	if (row < m) {
 		//this block needs to handle end - start thetaT columns
@@ -855,13 +979,13 @@ float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const 
 					(batch_offset, tt, csrRowIndex, csrColIndex, lambda, m, f, thetaT_fp16);
 				cudacall(cudaFree(thetaT_fp16));
 				#elif defined(CUMF_TT_FP16)
-				get_hermitian100_tt_fp16<<<batch_size, 64, SCAN_BATCH * f/2*sizeof(float2)>>>
+				get_hermitian100_tt_fp16_pascal<<<batch_size, 64, SCAN_BATCH * f/2*sizeof(float2)>>>
 					(batch_offset, (half2*) tt, csrRowIndex, csrColIndex, lambda, m, f, thetaT);	
 					#ifdef CUMF_SAVE_MODEL
 					saveDeviceFloatArrayToFile(std::string("./log/cg-xx16-tt16.") + std::to_string(iter),  f * f * batch_size/2, tt);
 					#endif					
 				#else
-				get_hermitian100<<<batch_size, 64, SCAN_BATCH * f/2*sizeof(float2)>>>
+				get_hermitian100<<<batch_size, 64>>>
 					(batch_offset, (float2*)tt, csrRowIndex, csrColIndex, lambda, m, f, (float2*)thetaT);
 					#ifdef CUMF_SAVE_MODEL
 					saveDeviceFloatArrayToFile(std::string("./log/0904/tt32.") + std::to_string(iter),  f * f * batch_size, tt);
@@ -975,7 +1099,7 @@ float doALS(const int* csrRowIndexHostPtr, const int* csrColIndexHostPtr, const 
 				get_hermitian100_tt_fp16<<<batch_size, 64, SCAN_BATCH * f/2*sizeof(float2)>>>
 					(batch_offset, (half2*) xx, cscColIndex, cscRowIndex, lambda, n, f, XT);
 				#else
-				get_hermitian100<<<batch_size, 64, SCAN_BATCH * f/2*sizeof(float2)>>>
+				get_hermitian100<<<batch_size, 64>>>
 					(batch_offset, (float2*)xx, cscColIndex, cscRowIndex, lambda, n, f, (float2*)XT);
 				#endif
 			}

@@ -370,6 +370,70 @@ do{\
 }\
 while(0)
 
+	#define fill_lower_half_from_fp16registers()\
+do{\
+	tt[index + tile_y/2 + 0 + (tile_x + 0)*F/2] = __halves2half2(temp0, temp1); \
+	tt[index + tile_y/2 + 1 + (tile_x + 0)*F/2] = __halves2half2(temp2, temp3); \
+	tt[index + tile_y/2 + 2 + (tile_x + 0)*F/2] = __halves2half2(temp4, temp5); \
+	tt[index + tile_y/2 + 3 + (tile_x + 0)*F/2] = __halves2half2(temp6, temp7); \
+	tt[index + tile_y/2 + 4 + (tile_x + 0)*F/2] = __halves2half2(temp8, temp9); \
+	\
+	tt[index + tile_y/2 + 0 + (tile_x + 1)*F/2] = __halves2half2(temp10, temp11); \
+	tt[index + tile_y/2 + 1 + (tile_x + 1)*F/2] = __halves2half2(temp12, temp13); \
+	tt[index + tile_y/2 + 2 + (tile_x + 1)*F/2] = __halves2half2(temp14, temp15); \
+	tt[index + tile_y/2 + 3 + (tile_x + 1)*F/2] = __halves2half2(temp16, temp17); \
+	tt[index + tile_y/2 + 4 + (tile_x + 1)*F/2] = __halves2half2(temp18, temp19); \
+	\
+	tt[index + tile_y/2 + 0 + (tile_x + 2)*F/2] = __halves2half2(temp20, temp21); \
+	tt[index + tile_y/2 + 1 + (tile_x + 2)*F/2] = __halves2half2(temp22, temp23); \
+	tt[index + tile_y/2 + 2 + (tile_x + 2)*F/2] = __halves2half2(temp24, temp25); \
+	tt[index + tile_y/2 + 3 + (tile_x + 2)*F/2] = __halves2half2(temp26, temp27); \
+	tt[index + tile_y/2 + 4 + (tile_x + 2)*F/2] = __halves2half2(temp28, temp29); \
+	\
+	tt[index + tile_y/2 + 0 + (tile_x + 3)*F/2] = __halves2half2(temp30, temp31); \
+	tt[index + tile_y/2 + 1 + (tile_x + 3)*F/2] = __halves2half2(temp32, temp33); \
+	tt[index + tile_y/2 + 2 + (tile_x + 3)*F/2] = __halves2half2(temp34, temp35); \
+	tt[index + tile_y/2 + 3 + (tile_x + 3)*F/2] = __halves2half2(temp36, temp37); \
+	tt[index + tile_y/2 + 4 + (tile_x + 3)*F/2] = __halves2half2(temp38, temp39); \
+	\
+	tt[index + tile_y/2 + 0 + (tile_x + 4)*F/2] = __halves2half2(temp40, temp41); \
+	tt[index + tile_y/2 + 1 + (tile_x + 4)*F/2] = __halves2half2(temp42, temp43); \
+	tt[index + tile_y/2 + 2 + (tile_x + 4)*F/2] = __halves2half2(temp44, temp45); \
+	tt[index + tile_y/2 + 3 + (tile_x + 4)*F/2] = __halves2half2(temp46, temp47); \
+	tt[index + tile_y/2 + 4 + (tile_x + 4)*F/2] = __halves2half2(temp48, temp49); \
+	\
+	tt[index + tile_y/2 + 0 + (tile_x + 5)*F/2] = __halves2half2(temp50, temp51); \
+	tt[index + tile_y/2 + 1 + (tile_x + 5)*F/2] = __halves2half2(temp52, temp53); \
+	tt[index + tile_y/2 + 2 + (tile_x + 5)*F/2] = __halves2half2(temp54, temp55); \
+	tt[index + tile_y/2 + 3 + (tile_x + 5)*F/2] = __halves2half2(temp56, temp57); \
+	tt[index + tile_y/2 + 4 + (tile_x + 5)*F/2] = __halves2half2(temp58, temp59); \
+	\
+	tt[index + tile_y/2 + 0 + (tile_x + 6)*F/2] = __halves2half2(temp60, temp61); \
+	tt[index + tile_y/2 + 1 + (tile_x + 6)*F/2] = __halves2half2(temp62, temp63); \
+	tt[index + tile_y/2 + 2 + (tile_x + 6)*F/2] = __halves2half2(temp64, temp65); \
+	tt[index + tile_y/2 + 3 + (tile_x + 6)*F/2] = __halves2half2(temp66, temp67); \
+	tt[index + tile_y/2 + 4 + (tile_x + 6)*F/2] = __halves2half2(temp68, temp69); \
+	\
+	tt[index + tile_y/2 + 0 + (tile_x + 7)*F/2] = __halves2half2(temp70, temp71); \
+	tt[index + tile_y/2 + 1 + (tile_x + 7)*F/2] = __halves2half2(temp72, temp73); \
+	tt[index + tile_y/2 + 2 + (tile_x + 7)*F/2] = __halves2half2(temp74, temp75); \
+	tt[index + tile_y/2 + 3 + (tile_x + 7)*F/2] = __halves2half2(temp76, temp77); \
+	tt[index + tile_y/2 + 4 + (tile_x + 7)*F/2] = __halves2half2(temp78, temp79); \
+	\
+	tt[index + tile_y/2 + 0 + (tile_x + 8)*F/2] = __halves2half2(temp80, temp81); \
+	tt[index + tile_y/2 + 1 + (tile_x + 8)*F/2] = __halves2half2(temp82, temp83); \
+	tt[index + tile_y/2 + 2 + (tile_x + 8)*F/2] = __halves2half2(temp84, temp85); \
+	tt[index + tile_y/2 + 3 + (tile_x + 8)*F/2] = __halves2half2(temp86, temp87); \
+	tt[index + tile_y/2 + 4 + (tile_x + 8)*F/2] = __halves2half2(temp88, temp89); \
+	\
+	tt[index + tile_y/2 + 0 + (tile_x + 9)*F/2] = __halves2half2(temp90, temp91); \
+	tt[index + tile_y/2 + 1 + (tile_x + 9)*F/2] = __halves2half2(temp92, temp93); \
+	tt[index + tile_y/2 + 2 + (tile_x + 9)*F/2] = __halves2half2(temp94, temp95); \
+	tt[index + tile_y/2 + 3 + (tile_x + 9)*F/2] = __halves2half2(temp96, temp97); \
+	tt[index + tile_y/2 + 4 + (tile_x + 9)*F/2] = __halves2half2(temp98, temp99); \
+}\
+while(0)
+
 #define fill_lower_half_from_registers_fp16()\
 do{\
 	tt[index + tile_y/2 + 0 + (tile_x + 0)*F/2] = __floats2half2_rn(temp0, temp1); \
@@ -498,6 +562,71 @@ do{\
 }\
 while(0)
 	
+#define fill_upper_half_from_fp16registers()\
+do{\
+	tt[index + tile_x/2 + 0 + (tile_y + 0)*F/2] = __halves2half2(temp0, temp10); \
+	tt[index + tile_x/2 + 1 + (tile_y + 0)*F/2] = __halves2half2(temp20, temp30); \
+	tt[index + tile_x/2 + 2 + (tile_y + 0)*F/2] = __halves2half2(temp40, temp50); \
+	tt[index + tile_x/2 + 3 + (tile_y + 0)*F/2] = __halves2half2(temp60, temp70); \
+	tt[index + tile_x/2 + 4 + (tile_y + 0)*F/2] = __halves2half2(temp80, temp90); \
+	\
+	tt[index + tile_x/2 + 0 + (tile_y + 1)*F/2] = __halves2half2(temp1, temp11); \
+	tt[index + tile_x/2 + 1 + (tile_y + 1)*F/2] = __halves2half2(temp21, temp31); \
+	tt[index + tile_x/2 + 2 + (tile_y + 1)*F/2] = __halves2half2(temp41, temp51); \
+	tt[index + tile_x/2 + 3 + (tile_y + 1)*F/2] = __halves2half2(temp61, temp71); \
+	tt[index + tile_x/2 + 4 + (tile_y + 1)*F/2] = __halves2half2(temp81, temp91); \
+	\
+	tt[index + tile_x/2 + 0 + (tile_y + 2)*F/2] = __halves2half2(temp2, temp12); \
+	tt[index + tile_x/2 + 1 + (tile_y + 2)*F/2] = __halves2half2(temp22, temp32); \
+	tt[index + tile_x/2 + 2 + (tile_y + 2)*F/2] = __halves2half2(temp42, temp52); \
+	tt[index + tile_x/2 + 3 + (tile_y + 2)*F/2] = __halves2half2(temp62, temp72); \
+	tt[index + tile_x/2 + 4 + (tile_y + 2)*F/2] = __halves2half2(temp82, temp92); \
+	\
+	tt[index + tile_x/2 + 0 + (tile_y + 3)*F/2] = __halves2half2(temp3, temp13); \
+	tt[index + tile_x/2 + 1 + (tile_y + 3)*F/2] = __halves2half2(temp23, temp33); \
+	tt[index + tile_x/2 + 2 + (tile_y + 3)*F/2] = __halves2half2(temp43, temp53); \
+	tt[index + tile_x/2 + 3 + (tile_y + 3)*F/2] = __halves2half2(temp63, temp73); \
+	tt[index + tile_x/2 + 4 + (tile_y + 3)*F/2] = __halves2half2(temp83, temp93); \
+	\
+	tt[index + tile_x/2 + 0 + (tile_y + 4)*F/2] = __halves2half2(temp4, temp14); \
+	tt[index + tile_x/2 + 1 + (tile_y + 4)*F/2] = __halves2half2(temp24, temp34); \
+	tt[index + tile_x/2 + 2 + (tile_y + 4)*F/2] = __halves2half2(temp44, temp54); \
+	tt[index + tile_x/2 + 3 + (tile_y + 4)*F/2] = __halves2half2(temp64, temp74); \
+	tt[index + tile_x/2 + 4 + (tile_y + 4)*F/2] = __halves2half2(temp84, temp94); \
+	\
+	tt[index + tile_x/2 + 0 + (tile_y + 5)*F/2] = __halves2half2(temp5, temp15); \
+	tt[index + tile_x/2 + 1 + (tile_y + 5)*F/2] = __halves2half2(temp25, temp35); \
+	tt[index + tile_x/2 + 2 + (tile_y + 5)*F/2] = __halves2half2(temp45, temp55); \
+	tt[index + tile_x/2 + 3 + (tile_y + 5)*F/2] = __halves2half2(temp65, temp75); \
+	tt[index + tile_x/2 + 4 + (tile_y + 5)*F/2] = __halves2half2(temp85, temp95); \
+	\
+	tt[index + tile_x/2 + 0 + (tile_y + 6)*F/2] = __halves2half2(temp6, temp16); \
+	tt[index + tile_x/2 + 1 + (tile_y + 6)*F/2] = __halves2half2(temp26, temp36); \
+	tt[index + tile_x/2 + 2 + (tile_y + 6)*F/2] = __halves2half2(temp46, temp56); \
+	tt[index + tile_x/2 + 3 + (tile_y + 6)*F/2] = __halves2half2(temp66, temp76); \
+	tt[index + tile_x/2 + 4 + (tile_y + 6)*F/2] = __halves2half2(temp86, temp96); \
+	\
+	tt[index + tile_x/2 + 0 + (tile_y + 7)*F/2] = __halves2half2(temp7, temp17); \
+	tt[index + tile_x/2 + 1 + (tile_y + 7)*F/2] = __halves2half2(temp27, temp37); \
+	tt[index + tile_x/2 + 2 + (tile_y + 7)*F/2] = __halves2half2(temp47, temp57); \
+	tt[index + tile_x/2 + 3 + (tile_y + 7)*F/2] = __halves2half2(temp67, temp77); \
+	tt[index + tile_x/2 + 4 + (tile_y + 7)*F/2] = __halves2half2(temp87, temp97); \
+	\
+	tt[index + tile_x/2 + 0 + (tile_y + 8)*F/2] = __halves2half2(temp8, temp18); \
+	tt[index + tile_x/2 + 1 + (tile_y + 8)*F/2] = __halves2half2(temp28, temp38); \
+	tt[index + tile_x/2 + 2 + (tile_y + 8)*F/2] = __halves2half2(temp48, temp58); \
+	tt[index + tile_x/2 + 3 + (tile_y + 8)*F/2] = __halves2half2(temp68, temp78); \
+	tt[index + tile_x/2 + 4 + (tile_y + 8)*F/2] = __halves2half2(temp88, temp98); \
+	\
+	tt[index + tile_x/2 + 0 + (tile_y + 9)*F/2] = __halves2half2(temp9, temp19); \
+	tt[index + tile_x/2 + 1 + (tile_y + 9)*F/2] = __halves2half2(temp29, temp39); \
+	tt[index + tile_x/2 + 2 + (tile_y + 9)*F/2] = __halves2half2(temp49, temp59); \
+	tt[index + tile_x/2 + 3 + (tile_y + 9)*F/2] = __halves2half2(temp69, temp79); \
+	tt[index + tile_x/2 + 4 + (tile_y + 9)*F/2] = __halves2half2(temp89, temp99); \
+}\
+while(0)
+
+	
 #define fill_upper_half_from_registers_float2()\
 do{\
 	tt[index + tile_x/2 + 0 + (tile_y + 0)*F/2] = make_float2(temp0, temp10); \
@@ -625,6 +754,113 @@ do{\
 	tt[index + tile_y/2 + 4 + (tile_x + 9)*F/2] = make_float2(temp98, temp99); \
 }\
 while(0)
+	
+#define accumulate_in_fp16registers()\
+	do\
+    {\
+temp0 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 0].x),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 0].x), temp0);\
+temp1 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 0].x),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 0].y), temp1);\
+temp2 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 0].x),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 1].x), temp2);\
+temp3 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 0].x),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 1].y), temp3);\
+temp4 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 0].x),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 2].x), temp4);\
+temp5 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 0].x),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 2].y), temp5);\
+temp6 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 0].x),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 3].x), temp6);\
+temp7 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 0].x),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 3].y), temp7);\
+temp8 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 0].x),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 4].x), temp8);\
+temp9 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 0].x),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 4].y), temp9);\
+temp10 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 0].y),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 0].x), temp10);\
+temp11 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 0].y),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 0].y), temp11);\
+temp12 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 0].y),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 1].x), temp12);\
+temp13 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 0].y),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 1].y), temp13);\
+temp14 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 0].y),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 2].x), temp14);\
+temp15 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 0].y),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 2].y), temp15);\
+temp16 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 0].y),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 3].x), temp16);\
+temp17 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 0].y),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 3].y), temp17);\
+temp18 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 0].y),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 4].x), temp18);\
+temp19 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 0].y),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 4].y), temp19);\
+temp20 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 1].x),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 0].x), temp20);\
+temp21 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 1].x),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 0].y), temp21);\
+temp22 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 1].x),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 1].x), temp22);\
+temp23 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 1].x),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 1].y), temp23);\
+temp24 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 1].x),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 2].x), temp24);\
+temp25 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 1].x),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 2].y), temp25);\
+temp26 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 1].x),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 3].x), temp26);\
+temp27 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 1].x),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 3].y), temp27);\
+temp28 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 1].x),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 4].x), temp28);\
+temp29 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 1].x),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 4].y), temp29);\
+temp30 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 1].y),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 0].x), temp30);\
+temp31 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 1].y),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 0].y), temp31);\
+temp32 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 1].y),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 1].x), temp32);\
+temp33 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 1].y),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 1].y), temp33);\
+temp34 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 1].y),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 2].x), temp34);\
+temp35 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 1].y),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 2].y), temp35);\
+temp36 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 1].y),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 3].x), temp36);\
+temp37 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 1].y),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 3].y), temp37);\
+temp38 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 1].y),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 4].x), temp38);\
+temp39 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 1].y),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 4].y), temp39);\
+temp40 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 2].x),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 0].x), temp40);\
+temp41 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 2].x),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 0].y), temp41);\
+temp42 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 2].x),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 1].x), temp42);\
+temp43 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 2].x),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 1].y), temp43);\
+temp44 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 2].x),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 2].x), temp44);\
+temp45 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 2].x),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 2].y), temp45);\
+temp46 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 2].x),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 3].x), temp46);\
+temp47 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 2].x),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 3].y), temp47);\
+temp48 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 2].x),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 4].x), temp48);\
+temp49 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 2].x),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 4].y), temp49);\
+temp50 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 2].y),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 0].x), temp50);\
+temp51 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 2].y),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 0].y), temp51);\
+temp52 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 2].y),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 1].x), temp52);\
+temp53 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 2].y),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 1].y), temp53);\
+temp54 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 2].y),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 2].x), temp54);\
+temp55 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 2].y),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 2].y), temp55);\
+temp56 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 2].y),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 3].x), temp56);\
+temp57 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 2].y),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 3].y), temp57);\
+temp58 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 2].y),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 4].x), temp58);\
+temp59 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 2].y),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 4].y), temp59);\
+temp60 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 3].x),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 0].x), temp60);\
+temp61 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 3].x),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 0].y), temp61);\
+temp62 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 3].x),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 1].x), temp62);\
+temp63 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 3].x),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 1].y), temp63);\
+temp64 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 3].x),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 2].x), temp64);\
+temp65 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 3].x),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 2].y), temp65);\
+temp66 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 3].x),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 3].x), temp66);\
+temp67 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 3].x),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 3].y), temp67);\
+temp68 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 3].x),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 4].x), temp68);\
+temp69 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 3].x),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 4].y), temp69);\
+temp70 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 3].y),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 0].x), temp70);\
+temp71 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 3].y),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 0].y), temp71);\
+temp72 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 3].y),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 1].x), temp72);\
+temp73 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 3].y),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 1].y), temp73);\
+temp74 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 3].y),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 2].x), temp74);\
+temp75 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 3].y),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 2].y), temp75);\
+temp76 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 3].y),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 3].x), temp76);\
+temp77 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 3].y),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 3].y), temp77);\
+temp78 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 3].y),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 4].x), temp78);\
+temp79 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 3].y),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 4].y), temp79);\
+temp80 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 4].x),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 0].x), temp80);\
+temp81 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 4].x),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 0].y), temp81);\
+temp82 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 4].x),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 1].x), temp82);\
+temp83 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 4].x),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 1].y), temp83);\
+temp84 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 4].x),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 2].x), temp84);\
+temp85 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 4].x),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 2].y), temp85);\
+temp86 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 4].x),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 3].x), temp86);\
+temp87 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 4].x),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 3].y), temp87);\
+temp88 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 4].x),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 4].x), temp88);\
+temp89 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 4].x),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 4].y), temp89);\
+temp90 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 4].y),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 0].x), temp90);\
+temp91 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 4].y),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 0].y), temp91);\
+temp92 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 4].y),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 1].x), temp92);\
+temp93 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 4].y),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 1].y), temp93);\
+temp94 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 4].y),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 2].x), temp94);\
+temp95 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 4].y),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 2].y), temp95);\
+temp96 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 4].y),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 3].x), temp96);\
+temp97 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 4].y),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 3].y), temp97);\
+temp98 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 4].y),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 4].x), temp98);\
+temp99 = __hfma(__float2half(thetaTemp[tile_x/2 + k*F/2 + 4].y),  __float2half(thetaTemp[tile_y/2 + k*F/2 + 4].y), temp99);\
+	}\
+	while (0)\
+
 #define cudacall(call) \
     do\
     {\

@@ -116,7 +116,7 @@ HOST_COMPILER ?= g++
 NVCC          := $(CUDA_PATH)/bin/nvcc -ccbin $(HOST_COMPILER)
 
 # internal flags
-NVCCFLAGS   := -m${TARGET_SIZE} ${ARCH_FLAGS} -std=c++11 #--ptxas-options=-v --maxrregcount 255
+NVCCFLAGS   := -m${TARGET_SIZE} ${ARCH_FLAGS} -std=c++11 --ptxas-options=-v #--maxrregcount 255
 CCFLAGS     := -DADD_
 LDFLAGS     :=
 
@@ -181,7 +181,7 @@ ALL_LDFLAGS += $(addprefix -Xlinker ,$(EXTRA_LDFLAGS))
 ################################################################################
 
 # Gencode arguments
-SMS ?= 35
+SMS ?= 60
 
 ifeq ($(GENCODE_FLAGS),)
 # Generate SASS code for each SM architecture listed in $(SMS)
@@ -204,7 +204,7 @@ GENCODE_FLAGS += -gencode arch=compute_$(HIGHEST_SM),code=compute_$(HIGHEST_SM)
 endif
 endif
 
-ALL_CCFLAGS +=-rdc=true -Xptxas -dlcm=ca
+ALL_CCFLAGS +=#-rdc=true -Xptxas -dlcm=ca
 LIBRARIES +=-lcublas -lcusparse #-llapack -lblas -lmagma -lm -ltest -llapacktest -lcudart
 
 ################################################################################

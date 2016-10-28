@@ -14,7 +14,7 @@
 #include <string>
 
 #define DEVICEID 0
-#define ITERS 10
+#define ITERS 1
 
 int main(int argc, char **argv) {
 	//parse input parameters

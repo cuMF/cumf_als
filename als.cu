@@ -202,7 +202,8 @@ __global__ void RMSE(const float * csrVal, const int* cooRowIndex,
 			//a and b could be; there are user/item in testing but not training set
 			float a = __ldg(&thetaT[f * col + k]);
 			float b = __ldg(&XT[f * row + k]);
-			if(isnan(a)||isnan(b))
+			//if(isnan(a)||isnan(b))//nan not working in some platform
+			if(a!=a||b!=b)
 				break;
 			else
 				e -= a * b;

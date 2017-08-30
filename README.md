@@ -114,6 +114,12 @@ We are trying to improve the usability, stability and performance. Here are some
 
 (2) Multi GPU support. We have tested on very large data sets such as [SparkALS](https://databricks.com/blog/2014/07/23/scalable-collaborative-filtering-with-spark-mllib.html) and HugeWiki, on multiple GPUs on one server. We will make our multi GPU support code available soon.
 
+## Teams
+- [Wei Tan](https://github.com/wei-tan)
+- [Shiyu Chang](https://github.com/code-terminator)
+- [Liangliang Cao](https://github.com/llcao)
+
+
 ## References
 
 More details can be found at:

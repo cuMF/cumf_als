@@ -51,7 +51,7 @@ For Netflix data, type:
     cd ./data/netflix/
     python ./prepare_netflix_data.py
 
-Note: this can take 30+ minutes. You can download this [file](https://ibm.box.com/shared/static/5vmh77up8reodvihiq0ri66jltg9h4uh.tar) from your brower, extract and put the extracted files in [./data/netflix](./data/netflix) directly.
+Note: this can take 30+ minutes. You can download this [file](https://drive.google.com/uc?export=download&id=1dR8QVRwiERth1_jeFUwakDXbEzJsqixy) from your brower, extract and put the extracted files in [./data/netflix](./data/netflix) directly.
 
 For Movielens:
 
@@ -119,13 +119,11 @@ We are trying to improve the usability, stability and performance. Here are some
 - [Shiyu Chang](https://github.com/code-terminator)
 - [Liangliang Cao](https://github.com/llcao)
 
-
 ## References
 
 More details can be found at:
 
 1) Accelerate Recommender Systems with GPUs. Nvidia ParallelForAll [blog] ( https://devblogs.nvidia.com/parallelforall/accelerate-recommender-systems-with-gpus/).
-
 
 2) CuMF: Large-Scale Matrix Factorization on Just One Machine with GPUs. Nvidia GTC 2016 talk. [ppt](http://www.slideshare.net/tanwei/s6211-cumf-largescale-matrix-factorization-on-just-one-machine-with-gpus), [video](http://on-demand.gputechconf.com/gtc/2016/video/S6211.html)
 
